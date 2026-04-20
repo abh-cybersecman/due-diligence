@@ -1,0 +1,254 @@
+@import 'geist/dist/geist.css';
+@import 'geist/dist/geist-mono.css';
+
+/* ── Light mode (default) ─────────────────────────────── */
+:root {
+  --bg-primary:     #F8F9FA;
+  --bg-surface:     #FFFFFF;
+  --bg-subtle:      #F1F3F5;
+  --bg-muted:       #E9ECEF;
+
+  --text-primary:   #1A1D23;
+  --text-secondary: #4A5568;
+  --text-muted:     #718096;
+  --text-inverse:   #FFFFFF;
+
+  --border:         #DEE2E6;
+  --border-strong:  #ADB5BD;
+
+  --accent:         #1F3864;
+  --accent-hover:   #162B4D;
+  --accent-subtle:  #EBF0F8;
+
+  --blue:           #2E75B6;
+  --blue-subtle:    #E8F1F8;
+
+  --risk-critical:    #EE0000;
+  --risk-high:        #C00000;
+  --risk-medium:      #FFC000;
+  --risk-low:         #70AD47;
+  --risk-critical-bg: #FFF0F0;
+  --risk-high-bg:     #FFF0F0;
+  --risk-medium-bg:   #FFFBF0;
+  --risk-low-bg:      #F0FFF0;
+
+  --status-draft:          #718096;
+  --status-ir-pending:     #2E75B6;
+  --status-dd-sent:        #805AD5;
+  --status-dd-progress:    #D69E2E;
+  --status-risk-pending:   #DD6B20;
+  --status-closed:         #70AD47;
+  --status-closed-pending: #E53E3E;
+  --status-under-review:   #2B6CB0;
+
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.08);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.10);
+  --shadow-lg: 0 8px 24px rgba(0,0,0,0.12);
+
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+
+  --text-xs:   11px;
+  --text-sm:   13px;
+  --text-base: 14px;
+  --text-md:   15px;
+  --text-lg:   18px;
+  --text-xl:   22px;
+  --text-2xl:  28px;
+}
+
+/* ── Dark mode ────────────────────────────────────────── */
+[data-theme="dark"] {
+  --bg-primary:     #0F1117;
+  --bg-surface:     #1A1D23;
+  --bg-subtle:      #21262D;
+  --bg-muted:       #2D333B;
+
+  --text-primary:   #E6EDF3;
+  --text-secondary: #8B949E;
+  --text-muted:     #6E7681;
+  --text-inverse:   #0F1117;
+
+  --border:         #30363D;
+  --border-strong:  #484F58;
+
+  --accent:         #4A7FBF;
+  --accent-hover:   #5A8FD0;
+  --accent-subtle:  #1A2A3D;
+
+  --blue:           #58A6FF;
+  --blue-subtle:    #1A2840;
+
+  --risk-critical-bg: #2D1515;
+  --risk-high-bg:     #2D1515;
+  --risk-medium-bg:   #2D2410;
+  --risk-low-bg:      #162010;
+
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.30);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.40);
+  --shadow-lg: 0 8px 24px rgba(0,0,0,0.50);
+}
+
+/* ── Theme transition ─────────────────────────────────── */
+html {
+  transition: background-color 200ms ease, color 200ms ease;
+}
+
+/* ── Reset + base ─────────────────────────────────────── */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  height: 100%;
+}
+
+body {
+  font-family: 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: var(--text-base);
+  line-height: 1.6;
+  color: var(--text-primary);
+  background-color: var(--bg-primary);
+  -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  min-height: 100%;
+}
+
+/* ── Interactive transitions ─────────────────────────── */
+button, input, textarea, select, a {
+  transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease;
+}
+
+/* ── Fade-in ─────────────────────────────────────────── */
+.fade-in {
+  animation: fadeIn 200ms ease forwards;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Buttons ─────────────────────────────────────────── */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 14px;
+  font-family: inherit;
+  font-size: var(--text-sm);
+  font-weight: 500;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  cursor: pointer;
+  white-space: nowrap;
+  text-decoration: none;
+}
+
+.btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  background: var(--accent);
+  color: var(--text-inverse);
+  border-color: var(--accent);
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+.btn-secondary {
+  background: var(--bg-subtle);
+  color: var(--text-primary);
+  border-color: var(--border);
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background: var(--bg-muted);
+}
+
+.btn-danger {
+  background: var(--risk-high);
+  color: #fff;
+  border-color: var(--risk-high);
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: var(--risk-critical);
+  border-color: var(--risk-critical);
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--text-secondary);
+  border-color: transparent;
+}
+
+.btn-ghost:hover:not(:disabled) {
+  background: var(--bg-subtle);
+  color: var(--text-primary);
+}
+
+/* ── Inputs ─────────────────────────────────────────── */
+.input, .textarea {
+  width: 100%;
+  font-family: inherit;
+  font-size: var(--text-base);
+  color: var(--text-primary);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  outline: none;
+  transition: border-color 150ms ease;
+}
+
+.input {
+  height: 34px;
+  padding: 0 10px;
+}
+
+.textarea {
+  min-height: 80px;
+  padding: 8px 10px;
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.input:focus, .textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+.input::placeholder, .textarea::placeholder {
+  color: var(--text-muted);
+}
+
+/* ── Status badges ─────────────────────────────────── */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 100px;
+  padding: 2px 8px;
+  font-size: var(--text-xs);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+/* ── Cards / panels ─────────────────────────────────── */
+.card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+}

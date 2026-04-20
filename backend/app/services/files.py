@@ -145,11 +145,10 @@ _VENDOR_ALLOWED_MIMES = _DOCUMENT_MIMES | _IMAGE_MIMES
 async def store_vendor_file(
     file: UploadFile,
     engagement: Engagement,
-    question_id: "uuid.UUID | None",
+    question_id: uuid_lib.UUID | None,
     uploaded_by: str,
     db: AsyncSession,
 ) -> FileUpload:
-    import uuid as uuid_mod
     content = await file.read()
 
     max_bytes = settings.vendor_max_file_size_mb * 1024 * 1024
@@ -191,7 +190,7 @@ async def store_vendor_file(
     upload_dir = settings.upload_dir
     os.makedirs(upload_dir, mode=0o755, exist_ok=True)
 
-    stored_filename = str(uuid_mod.uuid4())
+    stored_filename = str(uuid_lib.uuid4())
     stored_path = os.path.join(upload_dir, stored_filename)
 
     try:
