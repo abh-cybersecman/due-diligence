@@ -42,6 +42,11 @@
 
 ### Frontend (IR + vendor portals) `8564d21`
 
+### Hotfix: Geist font loading `eb9e55b`
+
+- **Root cause** — `geist@1.3.1` ships only `.woff2` files; no CSS exists at `dist/geist.css` or `dist/geist-mono.css` (package is designed for Next.js font API)
+- **Fix** — Dockerfile now copies font files from `node_modules/geist/dist/fonts/` into `public/fonts/` before the Vite build; `index.css` replaced broken `@import` lines with explicit `@font-face` declarations referencing `/fonts/geist-sans/` and `/fonts/geist-mono/`
+
 - **Design system** — CSS custom properties for full light/dark palette (`styles/design-system.css`); Geist font; all tokens from CLAUDE.md (accent, risk, status, shadow, radius, text sizes); theme toggle persists to localStorage; OS `prefers-color-scheme` respected on first load
 - **AuthContext** — IR/vendor sessions in sessionStorage, admin in localStorage; typed login/logout helpers for all three roles
 - **EvaluationLogin.jsx** — centered email form; token from URL params; generic error message on failure
