@@ -30,8 +30,9 @@
 - **Admin auth** — `POST /api/admin/auth/login` (bcrypt verify, JWT issued), `POST /api/admin/auth/logout`; `get_admin_user` dependency guards all admin routes
 - **Engagement CRUD** — `GET/POST /api/admin/engagements`, `GET/PATCH /api/admin/engagements/{id}`; doc number auto-generated (`ABHIT-IST-DD-XXXX` from `DOC_NUMBER_START`); vendor + IR tokens generated at creation
 - **Engagement lifecycle state machine** — all transitions enforced server-side with 400 on invalid moves; advance, reopen, set-status endpoints implemented
-- **OC list settings** — full CRUD at `/api/admin/settings/oc-list`
-- **Pydantic schemas** — `schemas/auth.py`, `schemas/engagement.py`, `schemas/settings.py`, `schemas/vendor.py` for all request/response shapes
+- **Settings CRUD** — OC list full CRUD at `/api/admin/settings/oc-list`; Assignee full CRUD at `/api/admin/settings/assignees` (name + type_label; duplicate OC name → 409)
+- **Audit log query endpoints** — `GET /api/admin/audit` (system-wide, paginated); `GET /api/admin/engagements/{id}/audit` (per-engagement, paginated); both require admin JWT
+- **Pydantic schemas** — `schemas/auth.py`, `schemas/engagement.py`, `schemas/settings.py`, `schemas/vendor.py`, `schemas/audit.py` (metadata_ → metadata alias for JSON output) for all request/response shapes
 - **IR portal backend** — `POST /api/evaluation/auth/verify`: scoped JWT (type=ir, engagement_id), generic 401, audit logged; `GET /engagements/{token}/status`, `GET /engagements/{token}/responses` (read-only); `POST /engagements/{token}/files`: full security controls (magic-byte, Pillow, UUID filename, count/total limits before disk write), lifecycle trigger FUNCTIONAL_EVALUATION_PENDING → DD_SENT_UNOPENED on functional eval upload; `DELETE /engagements/{token}/files/{id}`
 - **Vendor portal backend** — `POST /api/vendor/auth/verify`: scoped JWT (type=vendor, engagement_id), generic 401, audit logged; `GET /engagements/{token}` (metadata + questions + files), `GET /engagements/{token}/responses`, `POST /engagements/{token}/responses` (upsert autosave + DD_SENT_UNOPENED → DD_IN_PROGRESS on first save), `POST /engagements/{token}/files` (same security controls as IR), `DELETE /engagements/{token}/files/{id}`, `POST /engagements/{token}/submit` (→ RISK_ASSESSMENT_PENDING)
 - **JWT scoping enforced on every request** — `get_vendor_engagement()` and `get_ir_engagement()` dependencies validate type and assert `engagement_id` in JWT matches the engagement resolved by the URL token on every single endpoint, not just auth
@@ -49,7 +50,8 @@
 - **VendorQuestionnaire.jsx** — sticky header with app name, status badge, 800ms debounced save indicator, dark mode toggle; questions grouped by section with Q-number + required indicator; AI addendum sections shown only if `is_ai_application`; TEXT questions: textarea with debounced autosave (pending changes coalesced, flushed before submit); FILE_UPLOAD questions: drag-and-drop zone with file list; read-only overlay with notice when status outside `{DD_SENT_UNOPENED, DD_IN_PROGRESS}`; submit confirmation modal; attachments summary panel
 - **App.jsx** — BrowserRouter with basename, routes for evaluation and vendor portals; theme initialised before first render
 
-## Phase 2 — Not started
+## Phase 2 — Not started (assignees CRUD and audit log endpoints already done above)
+
 
 ## Phase 3 — Not started
 
