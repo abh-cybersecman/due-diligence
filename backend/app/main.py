@@ -6,7 +6,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.database import AsyncSessionLocal
 from app.seed import seed_questions
+from app.routers.admin.audit import router as admin_audit_router
+from app.routers.admin.auth import router as admin_auth_router
 from app.routers.admin.engagements import router as admin_engagements_router
+from app.routers.admin.settings import router as admin_settings_router
+from app.routers.evaluation.auth import router as evaluation_auth_router
+from app.routers.evaluation.engagements import router as evaluation_engagements_router
+from app.routers.vendor.auth import router as vendor_auth_router
+from app.routers.vendor.engagements import router as vendor_engagements_router
 
 
 @asynccontextmanager
@@ -35,7 +42,14 @@ app.add_middleware(
 )
 
 
-app.include_router(admin_engagements_router)
+app.include_router(admin_auth_router, prefix="/api/admin")
+app.include_router(admin_engagements_router, prefix="/api/admin")
+app.include_router(admin_settings_router, prefix="/api/admin")
+app.include_router(admin_audit_router, prefix="/api/admin")
+app.include_router(evaluation_auth_router)
+app.include_router(evaluation_engagements_router)
+app.include_router(vendor_auth_router, prefix="/api/vendor/auth")
+app.include_router(vendor_engagements_router, prefix="/api/vendor/engagements")
 
 
 @app.get("/api/health")
