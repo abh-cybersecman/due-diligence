@@ -19,7 +19,9 @@
   - Q31–43: AI addendum (`is_ai_addendum=true`) across 3 sub-sections
   - Q9, Q10: `FILE_UPLOAD` type (architecture and network diagrams)
 - **Stub services** — `extraction.py`, `risk_ai.py`, `notifications.py` with correct return shapes, ready for Phase 3 wiring
-- **Utilities** — `sanitize.py` (bleach-based XSS stripping), `tokens.py` (UUID generation)
+- **Utilities** — `sanitize.py` (bleach-based XSS stripping, zero allowed tags/attributes), `tokens.py` (UUID generation)
+- **Auth service** — `services/auth.py`: bcrypt password verify/hash, JWT creation for all three roles (admin/vendor/IR) with correct scoping (`engagement_id` in vendor and IR payloads), FastAPI `Depends`-compatible guards `get_admin_user`, `get_vendor_user`, `get_ir_user`
+- **Stub API endpoints** — `POST /api/admin/engagements/{id}/extract` and `POST /api/admin/engagements/{id}/assess-risk` wired to stub services, guarded by `get_admin_user`; router package scaffolding (`routers/admin/`, `routers/evaluation/`, `routers/vendor/`) with `__init__.py` files
 - **`.env.example`** — all required keys documented; `.gitignore` covering `.env`, `__pycache__`, `node_modules`, build output
 - **Frontend scaffold** — minimal Vite + React app, multi-stage Docker build, nginx serving static files with API proxy
 
