@@ -1,5 +1,5 @@
 import React from 'react'
-import { BrowserRouter, Route, Routes } from 'react-router-dom'
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { AuthProvider } from './contexts/AuthContext'
 import EvaluationPortal from './pages/evaluation/EvaluationPortal'
 import VendorLogin from './pages/vendor/VendorLogin'
@@ -18,6 +18,7 @@ export default function App() {
     <AuthProvider>
       <BrowserRouter basename={BASE_PATH}>
         <Routes>
+          <Route path="/" element={<Navigate to="/admin/login" replace />} />
           <Route path="/evaluation/:token" element={<EvaluationPortal />} />
           <Route path="/respond/:token" element={<VendorLogin />} />
           <Route path="*" element={<NotFound />} />
