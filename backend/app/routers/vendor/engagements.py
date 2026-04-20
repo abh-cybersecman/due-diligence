@@ -244,7 +244,7 @@ async def upload_file(
 # DELETE /{token}/files/{file_id}  — remove a vendor attachment
 # ---------------------------------------------------------------------------
 
-@router.delete("/{token}/files/{file_id}", status_code=204)
+@router.delete("/{token}/files/{file_id}", status_code=204, response_model=None)
 async def delete_file(
     file_id: str,
     auth: VendorAuth,
