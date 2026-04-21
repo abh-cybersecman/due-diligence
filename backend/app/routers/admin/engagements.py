@@ -12,7 +12,7 @@ from app.config import settings
 from app.database import get_db
 from app.models.audit_log import ActorType, AuditLog
 from app.models.engagement import Engagement, EngagementStatus
-from app.models.file_upload import FileUpload
+from app.models.file_upload import FileType, FileUpload
 from app.models.response import Response
 from app.models.risk_assessment import RiskAssessment, RiskAssessmentStatus
 from app.models.settings import OperatingCompany
@@ -373,6 +373,54 @@ async def set_status(
         ),
         engagement_id=engagement_id,
         metadata={"from": old_status.value, "to": body.status.value},
+    )
+
+    await db.flush()
+    return EngagementResponse.model_validate(await _fetch_engagement(db, engagement_id))
+
+
+# ---------------------------------------------------------------------------
+# Close from UNDER_REVIEW — auto-routes based on IR doc presence
+# ---------------------------------------------------------------------------
+
+@router.post("/engagements/{engagement_id}/close", response_model=EngagementResponse)
+async def close_engagement(
+    engagement_id: uuid.UUID,
+    admin: str = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+) -> EngagementResponse:
+    """Close from UNDER_REVIEW: routes to CLOSED if NDA+SOW present, else CLOSED_PENDING_IR_DOCS."""
+    engagement = await _get_engagement_or_404(db, engagement_id)
+
+    if engagement.status != EngagementStatus.UNDER_REVIEW:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Can only close from UNDER_REVIEW (current: {engagement.status.value})",
+        )
+
+    docs_result = await db.execute(
+        select(FileUpload).where(
+            FileUpload.engagement_id == engagement_id,
+            FileUpload.file_type.in_([FileType.IR_NDA, FileType.IR_SOW]),
+        )
+    )
+    ir_docs = docs_result.scalars().all()
+    has_nda = any(f.file_type == FileType.IR_NDA for f in ir_docs)
+    has_sow = any(f.file_type == FileType.IR_SOW for f in ir_docs)
+    target = EngagementStatus.CLOSED if (has_nda and has_sow) else EngagementStatus.CLOSED_PENDING_IR_DOCS
+
+    old_status = engagement.status
+    engagement.status = target
+    engagement.updated_at = datetime.now(timezone.utc)
+
+    await log_action(
+        db,
+        actor=admin,
+        actor_type=ActorType.ADMIN,
+        action="engagement.status.changed",
+        description=f"Engagement {engagement.doc_number} closed: {old_status.value} → {target.value}",
+        engagement_id=engagement_id,
+        metadata={"from": old_status.value, "to": target.value, "has_nda": has_nda, "has_sow": has_sow},
     )
 
     await db.flush()

@@ -119,6 +119,12 @@
 - **IR portal: Vendor Responses tab** — two-tab layout added to `EvaluationPortal.jsx`. Tab 1: Pre-DD Documents (unchanged). Tab 2: Vendor Responses — visible from `DD_IN_PROGRESS` onwards; fetches `GET /api/evaluation/engagements/{token}/responses`; grouped by section; shows Q-number, question text, vendor answer (or "No answer entered"), and last-updated timestamp per response.
 - **`0001_initial_schema.py`** — `DD_SENT_UNOPENED` removed from the `engagementstatus` enum definition. Existing DB must be wiped and rebuilt (`docker compose down -v && docker compose up --build`).
 
+### UNDER_REVIEW vendor editing + smart close
+
+- **`UNDER_REVIEW` now editable for vendor** — `EDITABLE_STATUSES` on both backend and frontend expanded to include `UNDER_REVIEW`. Vendor can autosave responses and upload/delete files while the engagement is under review (intended for cases where a response changes months after initial closure). The Submit button is controlled separately via `SUBMIT_STATUSES = {DD_IN_PROGRESS}` — submit is not available in `UNDER_REVIEW` since the vendor's changes are visible to admin in real-time via the IR portal responses tab.
+- **Info banner in vendor questionnaire** — `UNDER_REVIEW` status shows a blue informational notice: "This engagement is under review. You may update your responses — changes are saved automatically."
+- **Smart close endpoint** — `POST /api/admin/engagements/{id}/close` replaces the two manual "Close Engagement" / "Close — Pending Docs" buttons in the `UNDER_REVIEW` header. The endpoint queries IR documents (NDA + SOW) and auto-routes to `CLOSED` if both present, or `CLOSED_PENDING_IR_DOCS` if either is missing. The admin can no longer manually select the wrong close state.
+
 ### Inline email editing in Engagement Detail
 
 - **`EmailEditRow` component** — replaces the static `InfoRow` for Vendor Emails and IR Emails in `EngagementDetail.jsx`. View mode shows current addresses with an Edit button. Edit mode shows each address as a removable chip; a text input with Enter/Add adds new addresses with format validation and duplicate detection; Save PATCHes `{ vendor_emails }` or `{ ir_emails }` to `/api/admin/engagements/{id}` and refreshes the engagement. No backend changes required.

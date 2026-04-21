@@ -36,7 +36,8 @@ from app.utils.sanitize import sanitize_text
 
 router = APIRouter()
 
-EDITABLE_STATUSES = {EngagementStatus.DD_IN_PROGRESS}
+EDITABLE_STATUSES = {EngagementStatus.DD_IN_PROGRESS, EngagementStatus.UNDER_REVIEW}
+SUBMIT_STATUSES = {EngagementStatus.DD_IN_PROGRESS}
 
 
 async def get_vendor_engagement(
@@ -286,7 +287,7 @@ async def submit_questionnaire(
 ) -> SubmitOut:
     engagement, email = auth
 
-    if engagement.status not in EDITABLE_STATUSES:
+    if engagement.status not in SUBMIT_STATUSES:
         raise HTTPException(
             status_code=400,
             detail=f"Cannot submit at current status: {engagement.status.value}",

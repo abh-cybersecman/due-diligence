@@ -673,7 +673,8 @@ UNDER_REVIEW
   → CLOSED or CLOSED_PENDING_IR_DOCS  (admin manually closes again — check IR doc status)
 ```
 
-Vendor form is editable only in: `DD_IN_PROGRESS`.
+Vendor form is editable (autosave, file upload/delete) in: `DD_IN_PROGRESS`, `UNDER_REVIEW`.
+Vendor form submit button is only available in: `DD_IN_PROGRESS`.
 Vendor form is read-only in all other statuses.
 IR can upload documents in any status.
 Admin can edit structured fields, risk assessment, and internal notes in any status.

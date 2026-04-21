@@ -1091,6 +1091,7 @@ export default function EngagementDetail() {
     else if (type === 'under-review') res = await apiFetch(`/api/admin/engagements/${id}/set-status`, { method: 'POST', body: JSON.stringify({ status: 'UNDER_REVIEW' }) })
     else if (type === 'close') res = await apiFetch(`/api/admin/engagements/${id}/set-status`, { method: 'POST', body: JSON.stringify({ status: 'CLOSED' }) })
     else if (type === 'close-pending') res = await apiFetch(`/api/admin/engagements/${id}/set-status`, { method: 'POST', body: JSON.stringify({ status: 'CLOSED_PENDING_IR_DOCS' }) })
+    else if (type === 'smart-close') res = await apiFetch(`/api/admin/engagements/${id}/close`, { method: 'POST', body: '{}' })
 
     if (res && !res.ok) {
       const d = await res.json().catch(() => ({}))
@@ -1139,10 +1140,7 @@ export default function EngagementDetail() {
               <button className="btn btn-secondary" onClick={() => doAction('under-review')}>Move to Under Review</button>
             )}
             {st === 'UNDER_REVIEW' && (
-              <>
-                <button className="btn btn-primary" onClick={() => doAction('close')}>Close Engagement</button>
-                <button className="btn btn-secondary" onClick={() => doAction('close-pending')}>Close — Pending Docs</button>
-              </>
+              <button className="btn btn-primary" onClick={() => doAction('smart-close')}>Close Engagement</button>
             )}
             <button className="btn btn-secondary" onClick={handleExport}>Export Word</button>
           </div>

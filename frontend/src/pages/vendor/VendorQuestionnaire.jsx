@@ -24,6 +24,7 @@ const STATUS_LABELS = {
   FUNCTIONAL_EVALUATION_PENDING: 'Awaiting Documents',
   DD_IN_PROGRESS: 'In Progress',
   RISK_ASSESSMENT_PENDING: 'Submitted',
+  UNDER_REVIEW: 'Under Review',
   CLOSED: 'Closed',
   CLOSED_PENDING_IR_DOCS: 'Closed',
   UNDER_REVIEW: 'Under Review',
@@ -37,7 +38,8 @@ const STATUS_COLORS = {
   UNDER_REVIEW: 'var(--status-under-review)',
 }
 
-const EDITABLE_STATUSES = new Set(['DD_IN_PROGRESS'])
+const EDITABLE_STATUSES = new Set(['DD_IN_PROGRESS', 'UNDER_REVIEW'])
+const SUBMIT_STATUSES = new Set(['DD_IN_PROGRESS'])
 
 // ─── ThemeToggle ──────────────────────────────────────────────────────────────
 
@@ -460,6 +462,7 @@ export default function VendorQuestionnaire({ token, session, onLogout }) {
   // ── Derived state ──────────────────────────────────────────────────────────
 
   const isEditable = meta ? EDITABLE_STATUSES.has(meta.status) : false
+  const canSubmit = meta ? SUBMIT_STATUSES.has(meta.status) : false
 
   const sections = useMemo(() => {
     if (!meta?.questions) return []
@@ -550,6 +553,13 @@ export default function VendorQuestionnaire({ token, session, onLogout }) {
       {/* Main */}
       <main style={s.main}>
         <div style={s.content} className="fade-in">
+
+          {/* Under review — editable but no submit */}
+          {meta?.status === 'UNDER_REVIEW' && (
+            <div style={s.infoNotice}>
+              This engagement is under review. You may update your responses — changes are saved automatically and visible to the Albatha Information Security Team.
+            </div>
+          )}
 
           {/* Read-only notice */}
           {!isEditable && (
@@ -670,7 +680,7 @@ export default function VendorQuestionnaire({ token, session, onLogout }) {
           </div>
 
           {/* Submit */}
-          {isEditable && (
+          {canSubmit && (
             <div style={s.submitRow}>
               <p style={s.submitHint}>
                 Once submitted, the questionnaire will be locked and sent for review.
@@ -755,6 +765,15 @@ const s = {
   content: {
     maxWidth: 760, margin: '0 auto',
     display: 'flex', flexDirection: 'column', gap: 24,
+  },
+  infoNotice: {
+    padding: '12px 16px',
+    background: 'var(--blue-subtle)',
+    border: '1px solid var(--blue)',
+    borderRadius: 'var(--radius-sm)',
+    fontSize: 'var(--text-sm)',
+    color: 'var(--blue)',
+    lineHeight: 1.6,
   },
   readOnlyNotice: {
     padding: '12px 16px',
