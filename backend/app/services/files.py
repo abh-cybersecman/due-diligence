@@ -1,7 +1,6 @@
 import io
 import os
 import uuid as uuid_lib
-from typing import Callable
 
 import aiofiles
 import magic
@@ -27,15 +26,42 @@ _DOCUMENT_MIMES = {
 }
 
 _IR_ALLOWED_MIMES = _DOCUMENT_MIMES | _IMAGE_MIMES
+_VENDOR_ALLOWED_MIMES = _DOCUMENT_MIMES | _IMAGE_MIMES
 
 _IR_FILE_TYPES = {FileType.IR_FUNCTIONAL_EVALUATION, FileType.IR_NDA, FileType.IR_SOW}
 
+_EXTENSION_TO_MIMES: dict[str, set[str]] = {
+    ".pdf":  {"application/pdf"},
+    ".doc":  {"application/msword"},
+    ".docx": {"application/vnd.openxmlformats-officedocument.wordprocessingml.document"},
+    ".xls":  {"application/vnd.ms-excel"},
+    ".xlsx": {"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
+    ".ppt":  {"application/vnd.ms-powerpoint"},
+    ".pptx": {"application/vnd.openxmlformats-officedocument.presentationml.presentation"},
+    ".jpg":  {"image/jpeg"},
+    ".jpeg": {"image/jpeg"},
+    ".png":  {"image/png"},
+    ".gif":  {"image/gif"},
+    ".webp": {"image/webp"},
+}
 
-def _validate_magic(content: bytes) -> str:
+
+def _validate_magic(content: bytes, allowed: set[str]) -> str:
     detected = magic.from_buffer(content, mime=True)
-    if detected not in _IR_ALLOWED_MIMES:
+    if detected not in allowed:
         raise HTTPException(400, f"File type not permitted ({detected})")
     return detected
+
+
+def _validate_extension_match(filename: str, detected_mime: str) -> None:
+    _, ext = os.path.splitext((filename or "").lower())
+    if not ext:
+        raise HTTPException(400, "File must have a recognised extension")
+    allowed_mimes = _EXTENSION_TO_MIMES.get(ext)
+    if allowed_mimes is None:
+        raise HTTPException(400, f"File extension '{ext}' is not permitted")
+    if detected_mime not in allowed_mimes:
+        raise HTTPException(400, "File content does not match its declared extension")
 
 
 def _validate_image(content: bytes) -> None:
@@ -89,8 +115,9 @@ async def store_ir_file(
     # Check engagement-level limits BEFORE touching disk
     await _check_ir_limits(db, engagement, len(content))
 
-    # Magic-byte validation
-    detected_mime = _validate_magic(content)
+    # Magic-byte validation + extension/content consistency check
+    detected_mime = _validate_magic(content, _IR_ALLOWED_MIMES)
+    _validate_extension_match(file.filename or "", detected_mime)
 
     # Extra Pillow validation for images
     if detected_mime in _IMAGE_MIMES:
@@ -139,9 +166,6 @@ async def delete_ir_file(
         pass
 
 
-_VENDOR_ALLOWED_MIMES = _DOCUMENT_MIMES | _IMAGE_MIMES
-
-
 async def store_vendor_file(
     file: UploadFile,
     engagement: Engagement,
@@ -179,10 +203,9 @@ async def store_vendor_file(
             f"Upload would exceed the {settings.vendor_max_total_upload_mb} MB total limit for this engagement",
         )
 
-    # Magic-byte validation
-    detected = magic.from_buffer(content, mime=True)
-    if detected not in _VENDOR_ALLOWED_MIMES:
-        raise HTTPException(400, f"File type not permitted ({detected})")
+    # Magic-byte validation + extension/content consistency check
+    detected = _validate_magic(content, _VENDOR_ALLOWED_MIMES)
+    _validate_extension_match(file.filename or "", detected)
 
     if detected in _IMAGE_MIMES:
         _validate_image(content)

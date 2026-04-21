@@ -59,6 +59,68 @@ function CrudSection({ title, description, items, loading, onAdd, onEdit, onDele
   )
 }
 
+// ── Portal Base URL ───────────────────────────────────────────────────────────
+
+function PortalURLSection() {
+  const [url, setUrl] = useState(() =>
+    localStorage.getItem('isdd_portal_base_url') || window.location.origin
+  )
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState('')
+
+  function startEdit() {
+    setDraft(url)
+    setEditing(true)
+  }
+
+  function save() {
+    const trimmed = draft.replace(/\/$/, '').trim()
+    if (!trimmed) return
+    localStorage.setItem('isdd_portal_base_url', trimmed)
+    setUrl(trimmed)
+    setEditing(false)
+  }
+
+  return (
+    <section style={s.section}>
+      <div style={s.sectionHeader}>
+        <div>
+          <h2 style={s.sectionTitle}>Portal Base URL</h2>
+          <p style={s.sectionDesc}>
+            Base URL prepended when copying vendor and IR portal share links from engagement details.
+          </p>
+        </div>
+        {!editing && (
+          <button className="btn btn-secondary" onClick={startEdit} style={{ flexShrink: 0 }}>
+            Edit
+          </button>
+        )}
+      </div>
+      <div className="card" style={{ padding: '14px 20px' }}>
+        {editing ? (
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <input
+              className="input"
+              style={{ flex: 1 }}
+              value={draft}
+              onChange={e => setDraft(e.target.value)}
+              placeholder="https://vendorportal.albatha.com"
+              onKeyDown={e => e.key === 'Enter' && save()}
+              autoFocus
+            />
+            <button className="btn btn-primary" onClick={save} disabled={!draft.trim()}>Save</button>
+            <button className="btn btn-secondary" onClick={() => setEditing(false)}>Cancel</button>
+          </div>
+        ) : (
+          <span style={{ fontFamily: "'Geist Mono', monospace", fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
+            {url}
+          </span>
+        )}
+      </div>
+    </section>
+  )
+}
+
 // ── OC List ───────────────────────────────────────────────────────────────────
 
 function OCSection({ apiFetch }) {
@@ -301,6 +363,7 @@ export default function Settings() {
           <p style={s.pageDesc}>Manage operating companies and assignees used across engagements.</p>
         </div>
 
+        <PortalURLSection />
         <OCSection apiFetch={apiFetch} />
         <AssigneeSection apiFetch={apiFetch} />
       </div>

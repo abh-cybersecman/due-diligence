@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import AdminLayout from '../../components/admin/AdminLayout'
 import { useAuth } from '../../contexts/AuthContext'
 import { BASE_PATH } from '../../config'
+import MultiSelectDropdown from '../../components/shared/MultiSelectDropdown'
 
 function useAdminFetch() {
   const { adminSession } = useAuth()
@@ -85,15 +86,6 @@ export default function NewEngagement() {
     apiFetch('/api/admin/settings/oc-list').then(r => r.ok ? r.json() : []).then(setOcs)
   }, [apiFetch])
 
-  function toggleOC(id) {
-    setForm(f => ({
-      ...f,
-      operating_company_ids: f.operating_company_ids.includes(id)
-        ? f.operating_company_ids.filter(x => x !== id)
-        : [...f.operating_company_ids, id],
-    }))
-  }
-
   async function handleSubmit(e) {
     e.preventDefault()
     setError('')
@@ -149,24 +141,18 @@ export default function NewEngagement() {
 
               <div style={s.field}>
                 <label style={s.label}>Operating Companies</label>
-                <div style={s.checkList}>
-                  {ocs.length === 0 && (
-                    <span style={{ fontSize: 'var(--text-sm)', color: 'var(--text-muted)' }}>
-                      No operating companies configured. Add them in Settings first.
-                    </span>
-                  )}
-                  {ocs.map(oc => (
-                    <label key={oc.id} style={s.checkItem}>
-                      <input
-                        type="checkbox"
-                        checked={form.operating_company_ids.includes(oc.id)}
-                        onChange={() => toggleOC(oc.id)}
-                        style={{ marginRight: 8 }}
-                      />
-                      {oc.name}
-                    </label>
-                  ))}
-                </div>
+                {ocs.length === 0 ? (
+                  <span style={{ fontSize: 'var(--text-sm)', color: 'var(--text-muted)' }}>
+                    No operating companies configured. Add them in Settings first.
+                  </span>
+                ) : (
+                  <MultiSelectDropdown
+                    items={ocs}
+                    value={form.operating_company_ids}
+                    onChange={ids => setForm(f => ({ ...f, operating_company_ids: ids }))}
+                    placeholder="Select operating companies…"
+                  />
+                )}
               </div>
 
               <EmailTagInput
@@ -238,8 +224,6 @@ const s = {
   required: { color: 'var(--risk-high)' },
   hint: { fontSize: 'var(--text-xs)', color: 'var(--text-muted)' },
 
-  checkList: { display: 'flex', flexDirection: 'column', gap: 6 },
-  checkItem: { display: 'flex', alignItems: 'center', fontSize: 'var(--text-sm)', cursor: 'pointer' },
   checkboxLabel: { display: 'flex', alignItems: 'center', fontSize: 'var(--text-sm)', cursor: 'pointer', color: 'var(--text-primary)' },
 
   tagBox: {
