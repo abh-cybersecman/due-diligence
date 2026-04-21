@@ -250,7 +250,7 @@ const uploadZoneStyles = {
 
 // ─── VendorResponsesTab ──────────────────────────────────────────────────────
 
-function VendorResponsesTab({ token, accessToken, onLogout }) {
+function VendorResponsesTab({ token, accessToken, onLogout, isAiApplication }) {
   const [responses, setResponses] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -277,13 +277,23 @@ function VendorResponsesTab({ token, accessToken, onLogout }) {
   if (error) {
     return <div style={{ ...rvStyles.placeholder, color: 'var(--risk-high)' }}>{error}</div>
   }
+  const totalQuestions = isAiApplication ? 43 : 30
+  const answeredCount = responses ? responses.length : 0
+  const pct = Math.round((answeredCount / totalQuestions) * 100)
+
   if (!responses || responses.length === 0) {
     return (
-      <div className="card" style={{ padding: '32px 24px', textAlign: 'center' }}>
-        <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-muted)', margin: 0 }}>
-          No responses yet — the vendor has not entered any answers.
-        </p>
-      </div>
+      <>
+        <div style={rvStyles.progressBar}>
+          <span style={rvStyles.progressLabel}>0 of {totalQuestions} questions answered</span>
+          <div style={rvStyles.progressTrack}><div style={{ ...rvStyles.progressFill, width: '0%' }} /></div>
+        </div>
+        <div className="card" style={{ padding: '32px 24px', textAlign: 'center' }}>
+          <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-muted)', margin: 0 }}>
+            No responses yet — the vendor has not entered any answers.
+          </p>
+        </div>
+      </>
     )
   }
 
@@ -300,6 +310,10 @@ function VendorResponsesTab({ token, accessToken, onLogout }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <div style={rvStyles.progressBar}>
+        <span style={rvStyles.progressLabel}>{answeredCount} of {totalQuestions} questions answered</span>
+        <div style={rvStyles.progressTrack}><div style={{ ...rvStyles.progressFill, width: `${pct}%` }} /></div>
+      </div>
       {sections.map((section) => (
         <div key={section} className="card" style={{ padding: 0, overflow: 'hidden' }}>
           <div style={rvStyles.sectionHeader}>{section}</div>
@@ -391,6 +405,32 @@ const rvStyles = {
   meta: {
     fontSize: 'var(--text-xs)',
     color: 'var(--text-muted)',
+  },
+  progressBar: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 6,
+    padding: '12px 16px',
+    background: 'var(--bg-surface)',
+    border: '1px solid var(--border)',
+    borderRadius: 'var(--radius-md)',
+  },
+  progressLabel: {
+    fontSize: 'var(--text-sm)',
+    fontWeight: 500,
+    color: 'var(--text-secondary)',
+  },
+  progressTrack: {
+    height: 6,
+    background: 'var(--bg-muted)',
+    borderRadius: 100,
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: '100%',
+    background: 'var(--accent)',
+    borderRadius: 100,
+    transition: 'width 300ms ease',
   },
 }
 
@@ -641,6 +681,7 @@ function PortalContent({ token, session, onLogout }) {
               token={token}
               accessToken={session.accessToken}
               onLogout={onLogout}
+              isAiApplication={engagement?.is_ai_application}
             />
           )}
 
