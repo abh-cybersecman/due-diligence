@@ -9,6 +9,37 @@ from app.models.file_upload import FileType
 from app.schemas.settings import OCResponse
 
 
+class StructuredFieldsUpdate(BaseModel):
+    application_name: Optional[str] = None
+    service_type: Optional[str] = None
+    hosting_location: Optional[str] = None
+    hyperscaler: Optional[str] = None
+    disaster_recovery: Optional[str] = None
+    dr_location: Optional[str] = None
+    data_residency_region: Optional[str] = None
+    encryption_at_rest: Optional[str] = None
+    encryption_in_transit: Optional[str] = None
+    mfa_supported: Optional[str] = None
+
+
+class StructuredFieldsResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    engagement_id: uuid.UUID
+    application_name: Optional[str] = None
+    service_type: Optional[str] = None
+    hosting_location: Optional[str] = None
+    hyperscaler: Optional[str] = None
+    disaster_recovery: Optional[str] = None
+    dr_location: Optional[str] = None
+    data_residency_region: Optional[str] = None
+    encryption_at_rest: Optional[str] = None
+    encryption_in_transit: Optional[str] = None
+    mfa_supported: Optional[str] = None
+    updated_at: datetime
+
+
 # ---------------------------------------------------------------------------
 # IR / evaluation portal schemas
 # ---------------------------------------------------------------------------

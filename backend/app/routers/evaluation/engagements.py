@@ -148,6 +148,34 @@ async def upload_file(
 
     await db.flush()
     await db.refresh(record)
+
+    # Auto-resolve CLOSED_PENDING_IR_DOCS → CLOSED when NDA + SOW are both present
+    if engagement.status == EngagementStatus.CLOSED_PENDING_IR_DOCS:
+        from sqlalchemy import select as _select
+        docs_result = await db.execute(
+            _select(FileUpload).where(
+                FileUpload.engagement_id == engagement.id,
+                FileUpload.file_type.in_([FileType.IR_NDA, FileType.IR_SOW]),
+            )
+        )
+        ir_docs = docs_result.scalars().all()
+        has_nda = any(f.file_type == FileType.IR_NDA for f in ir_docs)
+        has_sow = any(f.file_type == FileType.IR_SOW for f in ir_docs)
+        if has_nda and has_sow:
+            engagement.status = EngagementStatus.CLOSED
+            await log_action(
+                db,
+                actor="system",
+                actor_type=ActorType.IR,
+                action="engagement.status.advanced",
+                description=f"Engagement {engagement.doc_number} automatically closed after all required IR documents uploaded",
+                engagement_id=engagement.id,
+                metadata={
+                    "from": EngagementStatus.CLOSED_PENDING_IR_DOCS.value,
+                    "to": EngagementStatus.CLOSED.value,
+                },
+            )
+
     return IRDocumentOut.model_validate(record)
 
 

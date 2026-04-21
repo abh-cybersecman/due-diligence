@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response as FastAPIResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -14,6 +14,7 @@ from app.models.audit_log import ActorType, AuditLog
 from app.models.engagement import Engagement, EngagementStatus
 from app.models.file_upload import FileUpload
 from app.models.response import Response
+from app.models.risk_assessment import RiskAssessment, RiskAssessmentStatus
 from app.models.settings import OperatingCompany
 from app.schemas.audit import AuditLogEntry, AuditLogListResponse
 from app.schemas.engagement import (
@@ -26,6 +27,7 @@ from app.schemas.engagement import (
 )
 from app.services.audit import log_action
 from app.services.auth import get_admin_user
+from app.services.export import generate_export
 from app.services.extraction import extract_structured_fields
 from app.services.lifecycle import validate_transition
 from app.services.risk_ai import generate_risk_assessment
@@ -315,6 +317,18 @@ async def set_status(
     engagement = await _get_engagement_or_404(db, engagement_id)
     validate_transition(engagement.status, body.status)
 
+    # Closing requires a finalised risk assessment
+    if body.status in (EngagementStatus.CLOSED, EngagementStatus.CLOSED_PENDING_IR_DOCS):
+        ra_result = await db.execute(
+            select(RiskAssessment).where(RiskAssessment.engagement_id == engagement_id)
+        )
+        ra = ra_result.scalar_one_or_none()
+        if ra is None or ra.status != RiskAssessmentStatus.FINALISED:
+            raise HTTPException(
+                status_code=400,
+                detail="A finalised risk assessment is required before closing the engagement",
+            )
+
     old_status = engagement.status
     engagement.status = body.status
     engagement.updated_at = datetime.now(timezone.utc)
@@ -398,6 +412,27 @@ async def download_file(
         path=record.stored_path,
         media_type=record.mime_type,
         filename=record.original_filename,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Word export
+# ---------------------------------------------------------------------------
+
+@router.get("/engagements/{engagement_id}/export")
+async def export_engagement(
+    engagement_id: uuid.UUID,
+    admin: str = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+) -> FastAPIResponse:
+    engagement = await _get_engagement_or_404(db, engagement_id)
+    doc_bytes = await generate_export(engagement_id, db)
+    return FastAPIResponse(
+        content=doc_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={
+            "Content-Disposition": f'attachment; filename="{engagement.doc_number}.docx"'
+        },
     )
 
 

@@ -821,42 +821,44 @@ Vendor and IR routes prompt for email verification before showing any content.
 
 ## Build Phases
 
-### Phase 1 — Complete before starting Phase 2
-- [ ] Docker Compose with all three services
-- [ ] Alembic setup + all DB models
-- [ ] Question seeding (all 43 questions)
-- [ ] Admin auth (login/logout, JWT)
-- [ ] Engagement CRUD (create, list, detail, patch)
-- [ ] Document number auto-generation
-- [ ] OC list in settings (CRUD)
-- [ ] Both token generation (vendor + IR) on engagement creation
-- [ ] Engagement lifecycle state machine + transitions
-- [ ] IR portal: email auth, status display, document upload (with all security controls)
-- [ ] IR document upload triggers automatic DD phase advancement
-- [ ] Vendor portal: email auth (scoped JWT), questionnaire display, autosave, file upload, submit
-- [ ] All file upload security controls (magic bytes, UUID filenames, limits, serve via auth endpoint)
-- [ ] Input sanitization on all vendor and IR text inputs
-- [ ] Audit logging for all Phase 1 actions
-- [ ] Stub functions for extraction, risk AI, notifications
-- [ ] All auth failure responses generic (no leaking)
+### Phase 1 — COMPLETE ✅
+- [x] Docker Compose with all three services
+- [x] Alembic setup + all DB models
+- [x] Question seeding (all 43 questions)
+- [x] Admin auth (login/logout, JWT)
+- [x] Engagement CRUD (create, list, detail, patch)
+- [x] Document number auto-generation
+- [x] OC list in settings (CRUD)
+- [x] Both token generation (vendor + IR) on engagement creation
+- [x] Engagement lifecycle state machine + transitions
+- [x] IR portal: email auth, status display, document upload (with all security controls)
+- [x] IR document upload triggers automatic DD phase advancement
+- [x] Vendor portal: email auth (scoped JWT), questionnaire display, autosave, file upload, submit
+- [x] All file upload security controls (magic bytes, UUID filenames, limits, serve via auth endpoint)
+- [x] Input sanitization on all vendor and IR text inputs
+- [x] Audit logging for all Phase 1 actions
+- [x] Stub functions for extraction, risk AI, notifications
+- [x] All auth failure responses generic (no leaking)
 
-### Phase 2 — Complete before starting Phase 3
-- [ ] Admin engagement dashboard with all columns + filters
-- [ ] Structured fields panel (all fields, editable, "Extract with AI" button disabled)
-- [ ] Risk assessment panel (create, draft, edit items, multi-select assignee, finalise, reopen)
-- [ ] Assignee list in settings (CRUD)
-- [ ] Engagement can only be Closed with a finalised risk assessment
-- [ ] Closed — Pending IR Docs state and auto-resolution
-- [ ] Admin can reopen Closed → Under Review → Closed
-- [ ] Audit log (system-wide + per-engagement views)
-- [ ] Word export (python-docx, full template)
-- [ ] "Generate with AI" button on risk assessment (disabled with tooltip)
-- [ ] Admin can edit all fields (structured, risk assessment, notes) at any lifecycle stage
+### Phase 2 — COMPLETE ✅
+- [x] Admin engagement dashboard with all columns + filters
+- [x] Structured fields panel (all fields, editable, "Extract with AI" button disabled)
+- [x] Risk assessment panel (create, draft, edit items, multi-select assignee, finalise, reopen)
+- [x] Assignee list in settings (CRUD)
+- [x] Engagement can only be Closed with a finalised risk assessment
+- [x] Closed — Pending IR Docs state and auto-resolution
+- [x] Admin can reopen Closed → Under Review → Closed
+- [x] Audit log (system-wide + per-engagement views)
+- [x] Word export (python-docx, full template)
+- [x] "Generate with AI" button on risk assessment (disabled with tooltip)
+- [x] Admin can edit all fields (structured, risk assessment, notes) at any lifecycle stage
+- [ ] Database backup (pg_dump + tar.gz + download) — deferred to Phase 3
 
-### Phase 3 — Wire AI
+### Phase 3 — Wire AI + Notifications + Backup
 - [ ] Claude API integration for field extraction
 - [ ] Claude API integration for risk assessment generation
 - [ ] Email notification wiring (SMTP)
+- [ ] Database backup: pg_dump via subprocess, tar.gz with uploads, backup metadata JSON, password re-confirmation, rate-limited download endpoint
 
 ### Phase 4 — Import
 - [ ] JSON import with review-before-save flow
@@ -866,18 +868,18 @@ Vendor and IR routes prompt for email verification before showing any content.
 
 ## Security Checklist (Before Any Phase is Considered Done)
 
-- [ ] No raw SQL strings anywhere — SQLAlchemy ORM only
-- [ ] All vendor JWTs scoped to engagement_id, validated on every request
-- [ ] All IR JWTs scoped to engagement_id, validated on every request
-- [ ] File magic byte validation implemented and tested
-- [ ] Files served only via authenticated endpoints
-- [ ] No file stored with its original filename or executable extension
-- [ ] XSS sanitization on all vendor/IR text inputs
-- [ ] Generic error messages on all auth failures
-- [ ] CORS configured to frontend origin only
-- [ ] Upload limits (per-file, per-count, per-total) enforced server-side
-- [ ] Backup endpoint rate-limited and requires password re-confirmation
-- [ ] No secrets in code — all from environment variables
+- [x] No raw SQL strings anywhere — SQLAlchemy ORM only
+- [x] All vendor JWTs scoped to engagement_id, validated on every request
+- [x] All IR JWTs scoped to engagement_id, validated on every request
+- [x] File magic byte validation implemented and tested
+- [x] Files served only via authenticated endpoints
+- [x] No file stored with its original filename or executable extension
+- [x] XSS sanitization on all vendor/IR text inputs
+- [x] Generic error messages on all auth failures
+- [x] CORS configured to frontend origin only
+- [x] Upload limits (per-file, per-count, per-total) enforced server-side
+- [ ] Backup endpoint rate-limited and requires password re-confirmation (Phase 3)
+- [x] No secrets in code — all from environment variables
 
 ---
 

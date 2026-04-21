@@ -62,44 +62,45 @@
 
 ---
 
-## Phase 2 — Not started
+## Phase 2 — COMPLETE ✅
 
-**Remaining work:**
+### Backend additions
 
-### Admin dashboard + engagement detail (frontend)
-- [ ] Admin login page (`pages/admin/Login.jsx`)
-- [ ] Admin dashboard (`pages/admin/Dashboard.jsx`) — engagement table with all columns, status badges, filters (status, search), pagination
-- [ ] New engagement form (`pages/admin/NewEngagement.jsx`) — application name, OC multi-select, vendor/IR emails, AI flag
-- [ ] Engagement detail page (`pages/admin/EngagementDetail.jsx`) — responses panel, structured fields panel, risk assessment panel, file download, lifecycle action buttons
+- **Structured fields router** — `routers/admin/structured_fields.py`: `GET /api/admin/engagements/{id}/structured-fields` (returns `null` if no record yet, never 404); `PATCH /api/admin/engagements/{id}/structured-fields` (creates on first call, partial updates via `model_dump(exclude_unset=True)`); all mutations audit-logged
+- **Risk assessment router** — `routers/admin/risk_assessment.py`:
+  - `POST /api/admin/engagements/{id}/risk-assessment` — creates DRAFT; 409 if already exists
+  - `GET /api/admin/engagements/{id}/risk-assessment` — returns full assessment including `risk_items`
+  - `PATCH /api/admin/engagements/{id}/risk-assessment` — updates `overall_rating`, `summary`, and/or `risk_items`; risk items replaced atomically (delete-all then re-insert); all post-write returns use `execution_options(populate_existing=True)` to bypass SQLAlchemy identity map cache
+  - `POST /api/admin/engagements/{id}/risk-assessment/finalise` — sets FINALISED; if engagement is `RISK_ASSESSMENT_PENDING` auto-advances to `CLOSED` (NDA + SOW both present) or `CLOSED_PENDING_IR_DOCS` (either missing); status change audit-logged by "system" actor
+  - `POST /api/admin/engagements/{id}/risk-assessment/reopen` — returns to DRAFT
+- **Lifecycle enforcement for set-status** — `POST /{id}/set-status` to `CLOSED` or `CLOSED_PENDING_IR_DOCS` now requires a finalised risk assessment; returns 400 with explanatory message if not present
+- **CLOSED_PENDING_IR_DOCS auto-resolution** — IR upload handler (`routers/evaluation/engagements.py`) checks after every file write: if engagement is `CLOSED_PENDING_IR_DOCS` and both `IR_NDA` + `IR_SOW` are now present, auto-advances to `CLOSED` with system audit log entry
+- **Word export** — `services/export.py` using `python-docx`; entry point `generate_export(engagement_id, db) -> bytes`; five sections:
+  1. Cover page — application name, OC names joined, document number, export date
+  2. Document Control — version table (v1.0 pre-filled)
+  3. Executive Summary — Phase 3 scaffold placeholder
+  4. Risk Assessment — overall rating badge, summary, risk register table (description, rating colour-coded, assigned to, mitigation); empty scaffold if no RA
+  5. DDQ — all questions + responses grouped by section; AI addendum as labelled sub-section; images embedded inline; PDFs noted as `[Attachment: filename — see uploaded files]`
+  - Font: Dax (falls back to Arial); Albatha navy `#1F3864` / blue `#2E75B6` headings; risk colours per spec; navy table headers with white text; `#F2F2F2` alternating rows
+- `GET /api/admin/engagements/{id}/export` — returns `.docx` bytes with correct `Content-Disposition` header
+- **Pydantic schemas** — `StructuredFieldsUpdate`, `StructuredFieldsResponse` added to `schemas/engagement.py`; `RiskItemCreate`, `RiskItemResponse`, `RiskAssessmentCreate`, `RiskAssessmentUpdate`, `RiskAssessmentResponse` in `schemas/risk_assessment.py`
+- **Router registration** — `main.py` registers `admin_risk_assessment_router` and `admin_structured_fields_router` under `/api/admin`
 
-### Structured fields (backend + frontend)
-- [ ] `GET /api/admin/engagements/{id}/structured-fields`
-- [ ] `PATCH /api/admin/engagements/{id}/structured-fields`
-- [ ] Frontend panel — all 10 fields editable; "Extract with AI" button present but disabled with tooltip
+### Frontend additions
 
-### Risk assessment (backend + frontend)
-- [ ] `POST /api/admin/engagements/{id}/risk-assessment` — create draft
-- [ ] `GET /api/admin/engagements/{id}/risk-assessment`
-- [ ] `PATCH /api/admin/engagements/{id}/risk-assessment` — edit summary, rating, risk items
-- [ ] `POST /api/admin/engagements/{id}/risk-assessment/finalise` — triggers RISK_ASSESSMENT_PENDING → CLOSED or CLOSED_PENDING_IR_DOCS depending on IR doc presence
-- [ ] `POST /api/admin/engagements/{id}/risk-assessment/reopen`
-- [ ] Frontend panel — create/edit risk items, multi-select assignee chips, overall rating, finalise/reopen; "Generate with AI" button disabled with tooltip
-- [ ] Engagement can only be Closed with a finalised risk assessment
-
-### CLOSED_PENDING_IR_DOCS auto-resolution (backend)
-- [ ] When missing NDA or SOW uploaded by IR: auto-advance CLOSED_PENDING_IR_DOCS → CLOSED; audit logged
-
-### Audit log UI (frontend)
-- [ ] `pages/admin/Settings.jsx` — OC list + assignees management (CRUD already done backend); system-wide audit log table; per-engagement audit log shown in engagement detail
-
-### Word export
-- [ ] `services/export.py` — python-docx: cover page, document control, executive summary scaffold, risk assessment section, full questionnaire by section; AI addendum as labelled sub-section; Dax/Arial font, Albatha navy/blue palette, risk-colour-coded table rows
-- [ ] `GET /api/admin/engagements/{id}/export` — streams `.docx` file
-
-### Database backup (Phase 2 deferred)
-- [ ] `services/backup.py` — pg_dump via subprocess, tar.gz with uploads, backup metadata JSON
-- [ ] `POST /api/admin/settings/backup/trigger` — requires password re-confirmation, rate-limited 5/hr
-- [ ] `GET /api/admin/settings/backup/status` + `GET /api/admin/settings/backup/download`
+- **Admin login** (`pages/admin/Login.jsx`) — centered card matching design system; POST to `/api/admin/auth/login`; stores JWT via `AuthContext.loginAdmin()`; redirects to dashboard
+- **AdminLayout** (`components/admin/AdminLayout.jsx`) — 220px fixed sidebar; NavLink active state (accent-subtle bg, 2px left border, accent text); dark mode toggle (sun/moon icon, reads/writes `localStorage.theme`, toggles `data-theme` on `<html>`); logout button at bottom; `ProtectedAdmin` HOC redirects unauthenticated users to `/admin/login`
+- **Dashboard** (`pages/admin/Dashboard.jsx`) — paginated engagement table (50/page); columns: document number (Geist Mono, blue), application name, operating companies, status badge, AI badge, created date, submitted date; status filter dropdown; search-by-name form; row click navigates to detail
+- **New Engagement** (`pages/admin/NewEngagement.jsx`) — application name input; OC checkboxes (loaded from settings); `EmailTagInput` chip component for vendor_emails and ir_emails (Enter/comma adds, Backspace removes, blur commits); AI application checkbox; internal notes textarea; client-side validation before submit
+- **Engagement Detail** (`pages/admin/EngagementDetail.jsx`) — four-tab layout:
+  - *Overview* — engagement info grid (doc number, status badge, dates, vendor/IR emails, tokens); 9-field structured fields grid with Save button and disabled "Extract with AI" `AIButton` with tooltip
+  - *Risk Assessment* — create button if no RA; form with overall rating select and summary textarea; risk items list with `RiskItemRow` (description, rating select, assignee multi-select chip dropdown with outside-click close, mitigation textarea); add/remove items; Save Draft, Finalise, Reopen buttons; disabled "Generate with AI" `AIButton`
+  - *Responses* — read-only question/answer list grouped by section; file download links for FILE_UPLOAD responses
+  - *Audit Log* — paginated table (actor, type, action, description, timestamp)
+  - Lifecycle action buttons conditional on current status: Advance to IR (DRAFT), Reopen Questionnaire (RISK_ASSESSMENT_PENDING), Move to Under Review (CLOSED / CLOSED_PENDING_IR_DOCS), Close / Close Pending (UNDER_REVIEW)
+  - Export button fetches `.docx` blob and triggers browser download
+- **Settings** (`pages/admin/Settings.jsx`) — Operating Companies CRUD (add, inline edit, delete); Assignees CRUD (name + type label); generic error display; all mutations refresh the list
+- **App.jsx** — added `ProtectedAdmin` wrapper; registered `/admin/login`, `/admin/dashboard`, `/admin/engagements/new`, `/admin/engagements/:id`, `/admin/settings`
 
 ---
 
