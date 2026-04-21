@@ -1080,7 +1080,13 @@ export default function EngagementDetail() {
     setActionError('')
     let res
     if (type === 'advance') res = await apiFetch(`/api/admin/engagements/${id}/advance`, { method: 'POST', body: '{}' })
-    else if (type === 'dispatch') res = await apiFetch(`/api/admin/engagements/${id}/dispatch`, { method: 'POST', body: '{}' })
+    else if (type === 'dispatch') {
+      const filesRes = await apiFetch(`/api/admin/engagements/${id}/files`)
+      const files = filesRes.ok ? await filesRes.json() : []
+      const hasFE = files.some(f => f.file_type === 'IR_FUNCTIONAL_EVALUATION')
+      if (!hasFE && !window.confirm('No functional evaluation has been uploaded.\n\nDispatch the questionnaire to the vendor anyway?')) return
+      res = await apiFetch(`/api/admin/engagements/${id}/dispatch`, { method: 'POST', body: '{}' })
+    }
     else if (type === 'reopen-dd') res = await apiFetch(`/api/admin/engagements/${id}/reopen`, { method: 'POST', body: '{}' })
     else if (type === 'under-review') res = await apiFetch(`/api/admin/engagements/${id}/set-status`, { method: 'POST', body: JSON.stringify({ status: 'UNDER_REVIEW' }) })
     else if (type === 'close') res = await apiFetch(`/api/admin/engagements/${id}/set-status`, { method: 'POST', body: JSON.stringify({ status: 'CLOSED' }) })
