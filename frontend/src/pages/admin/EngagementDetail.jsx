@@ -492,7 +492,7 @@ function TokenRow({ label, token, urlPath }) {
 
 // ── Risk Assessment tab ───────────────────────────────────────────────────────
 
-function RiskTab({ engagementId, apiFetch }) {
+function RiskTab({ engagementId, apiFetch, onEngagementRefresh }) {
   const [ra, setRa] = useState(null)
   const [notFound, setNotFound] = useState(false)
   const [assignees, setAssignees] = useState([])
@@ -552,7 +552,7 @@ function RiskTab({ engagementId, apiFetch }) {
   async function finalise() {
     setError('')
     const res = await apiFetch(`/api/admin/engagements/${engagementId}/risk-assessment/finalise`, { method: 'POST', body: '{}' })
-    if (res.ok) { loadRa() }
+    if (res.ok) { loadRa(); onEngagementRefresh?.() }
     else { const d = await res.json().catch(() => ({})); setError(d.detail || 'Failed to finalise.') }
   }
 
@@ -1165,7 +1165,7 @@ export default function EngagementDetail() {
 
         {/* Tab content */}
         {activeTab === 'overview' && <OverviewTab engagement={engagement} apiFetch={apiFetch} onRefresh={loadEngagement} />}
-        {activeTab === 'risk' && <RiskTab engagementId={id} apiFetch={apiFetch} />}
+        {activeTab === 'risk' && <RiskTab engagementId={id} apiFetch={apiFetch} onEngagementRefresh={loadEngagement} />}
         {activeTab === 'responses' && <ResponsesTab engagementId={id} apiFetch={apiFetch} />}
         {activeTab === 'files' && <FilesTab engagementId={id} apiFetch={apiFetch} />}
         {activeTab === 'audit' && <AuditTab engagementId={id} apiFetch={apiFetch} />}
