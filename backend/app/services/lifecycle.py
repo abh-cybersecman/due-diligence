@@ -10,13 +10,9 @@ VALID_TRANSITIONS: dict[EngagementStatus, list[EngagementStatus]] = {
         EngagementStatus.PENDING_DISPATCH,
     ],
     EngagementStatus.PENDING_DISPATCH: [
-        EngagementStatus.DD_SENT_UNOPENED,
-    ],
-    EngagementStatus.DD_SENT_UNOPENED: [
         EngagementStatus.DD_IN_PROGRESS,
     ],
     EngagementStatus.DD_IN_PROGRESS: [
-        EngagementStatus.DD_SENT_UNOPENED,
         EngagementStatus.RISK_ASSESSMENT_PENDING,
     ],
     EngagementStatus.RISK_ASSESSMENT_PENDING: [

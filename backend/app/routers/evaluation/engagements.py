@@ -200,7 +200,6 @@ async def delete_file(
 
     # Functional evaluation is locked once the vendor link has been dispatched
     _locked_statuses = {
-        EngagementStatus.DD_SENT_UNOPENED,
         EngagementStatus.DD_IN_PROGRESS,
         EngagementStatus.RISK_ASSESSMENT_PENDING,
         EngagementStatus.CLOSED,

@@ -104,12 +104,20 @@
 
 ### Lifecycle refinement: PENDING_DISPATCH + FE deletion lock
 
-- **New `PENDING_DISPATCH` status** — inserted between `FUNCTIONAL_EVALUATION_PENDING` and `DD_SENT_UNOPENED`. IR uploading the functional evaluation now moves the engagement to `PENDING_DISPATCH` rather than directly to `DD_SENT_UNOPENED`. This accurately reflects that the questionnaire is ready but not yet issued.
-- **`POST /api/admin/engagements/{id}/dispatch`** — new admin endpoint; transitions `PENDING_DISPATCH → DD_SENT_UNOPENED`; audit-logged as `engagement.dispatched`.
+- **New `PENDING_DISPATCH` status** — inserted between `FUNCTIONAL_EVALUATION_PENDING` and `DD_IN_PROGRESS`. IR uploading the functional evaluation moves the engagement to `PENDING_DISPATCH`. Admin explicitly dispatches it via the "Dispatch to Vendor" button.
+- **`POST /api/admin/engagements/{id}/dispatch`** — new admin endpoint; transitions `PENDING_DISPATCH → DD_IN_PROGRESS`; audit-logged as `engagement.dispatched`.
 - **"Dispatch to Vendor" button** — appears in the engagement detail header when status is `PENDING_DISPATCH`; calls the new dispatch endpoint.
 - **Alembic migration `0002`** — `ALTER TYPE engagementstatus ADD VALUE IF NOT EXISTS 'PENDING_DISPATCH' AFTER 'FUNCTIONAL_EVALUATION_PENDING'`; runs automatically on backend startup.
-- **IR functional evaluation deletion lock** — the FE file is freely deletable while status is `FUNCTIONAL_EVALUATION_PENDING` or `PENDING_DISPATCH` (useful if the wrong file was uploaded). Once the engagement reaches `DD_SENT_UNOPENED` or beyond, attempting to delete the FE returns HTTP 403. NDA and SOW remain freely deletable at any status.
+- **IR functional evaluation deletion lock** — the FE file is freely deletable while status is `FUNCTIONAL_EVALUATION_PENDING` or `PENDING_DISPATCH`. Once the engagement reaches `DD_IN_PROGRESS` or beyond, attempting to delete the FE returns HTTP 403. NDA and SOW remain freely deletable at any status.
 - **Dashboard + status badge** — `PENDING_DISPATCH` added to `STATUS_LABELS` and `STATUS_COLORS` in both Dashboard and EngagementDetail; rendered in teal (`--status-pending-dispatch: #0891B2`).
+
+### Lifecycle simplification: remove DD_SENT_UNOPENED + IR vendor responses tab
+
+- **`DD_SENT_UNOPENED` removed** — the status was redundant once the IR portal gained a read-only responses view. The distinction between "dispatched but unopened" and "in progress" is now expressed through response count rather than a separate lifecycle state. `PENDING_DISPATCH → DD_IN_PROGRESS` is now a direct transition; dispatch sets `DD_IN_PROGRESS` immediately.
+- **Vendor editable window** — reduced from `{DD_SENT_UNOPENED, DD_IN_PROGRESS}` to `{DD_IN_PROGRESS}` only. No behaviour change since dispatch now sets `DD_IN_PROGRESS` directly.
+- **Removed auto-advancement in vendor save** — the backend no longer advances status on first vendor save (it was already `DD_IN_PROGRESS`). Frontend lifecycle-advancement block in `VendorQuestionnaire.jsx` removed accordingly.
+- **IR portal: Vendor Responses tab** — two-tab layout added to `EvaluationPortal.jsx`. Tab 1: Pre-DD Documents (unchanged). Tab 2: Vendor Responses — visible from `DD_IN_PROGRESS` onwards; fetches `GET /api/evaluation/engagements/{token}/responses`; grouped by section; shows Q-number, question text, vendor answer (or "No answer entered"), and last-updated timestamp per response.
+- **`0001_initial_schema.py`** — `DD_SENT_UNOPENED` removed from the `engagementstatus` enum definition. Existing DB must be wiped and rebuilt (`docker compose down -v && docker compose up --build`).
 
 ---
 

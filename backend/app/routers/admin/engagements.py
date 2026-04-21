@@ -282,12 +282,12 @@ async def dispatch_engagement(
     admin: str = Depends(get_admin_user),
     db: AsyncSession = Depends(get_db),
 ) -> EngagementResponse:
-    """Dispatch vendor questionnaire: PENDING_DISPATCH → DD_SENT_UNOPENED."""
+    """Dispatch vendor questionnaire: PENDING_DISPATCH → DD_IN_PROGRESS."""
     engagement = await _get_engagement_or_404(db, engagement_id)
-    validate_transition(engagement.status, EngagementStatus.DD_SENT_UNOPENED)
+    validate_transition(engagement.status, EngagementStatus.DD_IN_PROGRESS)
 
     old_status = engagement.status
-    engagement.status = EngagementStatus.DD_SENT_UNOPENED
+    engagement.status = EngagementStatus.DD_IN_PROGRESS
     engagement.updated_at = datetime.now(timezone.utc)
 
     await log_action(
@@ -295,9 +295,9 @@ async def dispatch_engagement(
         actor=admin,
         actor_type=ActorType.ADMIN,
         action="engagement.dispatched",
-        description=f"Engagement {engagement.doc_number} dispatched to vendor: {old_status.value} → DD_SENT_UNOPENED",
+        description=f"Engagement {engagement.doc_number} dispatched to vendor: {old_status.value} → DD_IN_PROGRESS",
         engagement_id=engagement_id,
-        metadata={"from": old_status.value, "to": EngagementStatus.DD_SENT_UNOPENED.value},
+        metadata={"from": old_status.value, "to": EngagementStatus.DD_IN_PROGRESS.value},
     )
 
     await db.flush()

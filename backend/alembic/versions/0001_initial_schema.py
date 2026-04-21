@@ -18,7 +18,7 @@ depends_on: Union[str, Sequence[str], None] = None
 
 # Named enum objects — reused across tables so SQLAlchemy creates them once
 engagementstatus = sa.Enum(
-    "DRAFT", "FUNCTIONAL_EVALUATION_PENDING", "DD_SENT_UNOPENED", "DD_IN_PROGRESS",
+    "DRAFT", "FUNCTIONAL_EVALUATION_PENDING", "DD_IN_PROGRESS",
     "RISK_ASSESSMENT_PENDING", "CLOSED", "CLOSED_PENDING_IR_DOCS", "UNDER_REVIEW",
     name="engagementstatus",
 )

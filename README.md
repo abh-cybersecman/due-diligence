@@ -20,14 +20,15 @@ The engagement moves through a defined set of statuses, with transitions enforce
 DRAFT
   → FUNCTIONAL_EVALUATION_PENDING    (admin triggers manually)
   → PENDING_DISPATCH                 (automatic: IR uploads functional evaluation)
-  → DD_SENT_UNOPENED                 (admin clicks "Dispatch to Vendor")
-  → DD_IN_PROGRESS                   (automatic: vendor saves first response)
+  → DD_IN_PROGRESS                   (admin clicks "Dispatch to Vendor")
   → RISK_ASSESSMENT_PENDING          (automatic: vendor submits)
   → CLOSED / CLOSED_PENDING_IR_DOCS  (admin finalises risk assessment)
   → UNDER_REVIEW                     (admin manually reopens closed engagement)
 ```
 
 `PENDING_DISPATCH` indicates the functional evaluation has been received and the vendor questionnaire is ready to go — the admin explicitly dispatches it rather than the link going live automatically.
+
+`DD_IN_PROGRESS` covers the full active questionnaire window, from dispatch through to vendor submission. The IR portal shows a read-only Vendor Responses tab once this status is reached.
 
 `CLOSED_PENDING_IR_DOCS` auto-resolves to `CLOSED` the moment both NDA and SOW are uploaded by IR.
 
@@ -70,9 +71,9 @@ Accessed at `/due-diligence/evaluation/:token` — the token is generated when t
 - Email verification gate: IR enters their email, which is checked against the `ir_emails` list on the engagement.
 - Upload three categories of documents: Functional Evaluation, NDA, SOW.
 - Uploading a Functional Evaluation automatically advances the engagement from `FUNCTIONAL_EVALUATION_PENDING` to `PENDING_DISPATCH`. The admin must then explicitly click **Dispatch to Vendor** to issue the questionnaire link.
-- The Functional Evaluation cannot be deleted once the questionnaire has been dispatched (`DD_SENT_UNOPENED` or later). It can be replaced before dispatch if the wrong file was uploaded.
+- The Functional Evaluation cannot be deleted once the questionnaire has been dispatched (`DD_IN_PROGRESS` or later). It can be replaced before dispatch if the wrong file was uploaded.
 - Uploading both NDA and SOW when the engagement is `CLOSED_PENDING_IR_DOCS` automatically advances it to `CLOSED`.
-- Read-only view of vendor responses once DD is in progress.
+- Two-tab layout: **Pre-DD Documents** (upload) and **Vendor Responses** (read-only, visible from `DD_IN_PROGRESS` onwards). The Vendor Responses tab shows all vendor answers grouped by section with last-updated timestamps.
 - Dark mode toggle; status badge in header.
 
 ---
@@ -84,7 +85,6 @@ Accessed at `/due-diligence/respond/:token` — the token is generated when the 
 - Email verification gate: vendor enters their email, checked against `vendor_emails`. JWT is scoped to this specific engagement and validated on every request.
 - 43-question security questionnaire (Q1–30 standard; Q31–43 AI addendum, shown only for AI applications).
 - 800ms debounced autosave; progress is preserved across sessions.
-- First save automatically advances the engagement from `DD_SENT_UNOPENED` to `DD_IN_PROGRESS`.
 - FILE_UPLOAD questions (Q9, Q10 — architecture diagrams) support drag-and-drop with per-file and total size limits.
 - Form becomes read-only once submitted or if the engagement moves out of the active DD window.
 - Submit confirmation modal; submission advances engagement to `RISK_ASSESSMENT_PENDING`.

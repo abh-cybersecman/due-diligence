@@ -22,7 +22,6 @@ function formatBytes(bytes) {
 const STATUS_LABELS = {
   DRAFT: 'Draft',
   FUNCTIONAL_EVALUATION_PENDING: 'Awaiting Documents',
-  DD_SENT_UNOPENED: 'Not Yet Started',
   DD_IN_PROGRESS: 'In Progress',
   RISK_ASSESSMENT_PENDING: 'Submitted',
   CLOSED: 'Closed',
@@ -31,7 +30,6 @@ const STATUS_LABELS = {
 }
 
 const STATUS_COLORS = {
-  DD_SENT_UNOPENED: 'var(--status-dd-sent)',
   DD_IN_PROGRESS: 'var(--status-dd-progress)',
   RISK_ASSESSMENT_PENDING: 'var(--status-risk-pending)',
   CLOSED: 'var(--status-closed)',
@@ -39,7 +37,7 @@ const STATUS_COLORS = {
   UNDER_REVIEW: 'var(--status-under-review)',
 }
 
-const EDITABLE_STATUSES = new Set(['DD_SENT_UNOPENED', 'DD_IN_PROGRESS'])
+const EDITABLE_STATUSES = new Set(['DD_IN_PROGRESS'])
 
 // ─── ThemeToggle ──────────────────────────────────────────────────────────────
 
@@ -356,11 +354,6 @@ export default function VendorQuestionnaire({ token, session, onLogout }) {
       if (res.status === 401 || res.status === 403) { onLogout(); return }
       if (!res.ok) throw new Error('Save failed')
 
-      // Reflect lifecycle advancement (DD_SENT_UNOPENED → DD_IN_PROGRESS)
-      if (meta?.status === 'DD_SENT_UNOPENED') {
-        setMeta((prev) => ({ ...prev, status: 'DD_IN_PROGRESS' }))
-      }
-
       setSaveStatus('saved')
       setTimeout(() => setSaveStatus('idle'), 1500)
     } catch {
@@ -559,7 +552,7 @@ export default function VendorQuestionnaire({ token, session, onLogout }) {
         <div style={s.content} className="fade-in">
 
           {/* Read-only notice */}
-          {!isEditable && meta?.status !== 'DD_SENT_UNOPENED' && (
+          {!isEditable && (
             <div style={s.readOnlyNotice}>
               {meta?.status === 'RISK_ASSESSMENT_PENDING'
                 ? 'This questionnaire has been submitted and is under review. No further changes can be made.'

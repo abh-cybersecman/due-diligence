@@ -36,7 +36,7 @@ from app.utils.sanitize import sanitize_text
 
 router = APIRouter()
 
-EDITABLE_STATUSES = {EngagementStatus.DD_SENT_UNOPENED, EngagementStatus.DD_IN_PROGRESS}
+EDITABLE_STATUSES = {EngagementStatus.DD_IN_PROGRESS}
 
 
 async def get_vendor_engagement(
@@ -166,20 +166,6 @@ async def save_responses(
             )
             db.add(new_r)
             saved.append(new_r)
-
-    # Lifecycle: first save opens the questionnaire
-    if engagement.status == EngagementStatus.DD_SENT_UNOPENED:
-        engagement.status = EngagementStatus.DD_IN_PROGRESS
-        engagement.updated_at = datetime.now(timezone.utc)
-        await log_action(
-            db=db,
-            engagement_id=engagement.id,
-            actor=email,
-            actor_type=ActorType.VENDOR,
-            action="engagement.status_change",
-            description="Questionnaire opened by vendor — status advanced to DD_IN_PROGRESS",
-            metadata={"old": "DD_SENT_UNOPENED", "new": "DD_IN_PROGRESS"},
-        )
 
     await db.commit()
     for r in saved:

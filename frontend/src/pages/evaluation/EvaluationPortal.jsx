@@ -22,10 +22,18 @@ function formatBytes(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
+function formatDate(iso) {
+  if (!iso) return '—'
+  return new Date(iso).toLocaleString('en-GB', {
+    day: '2-digit', month: 'short', year: 'numeric',
+    hour: '2-digit', minute: '2-digit',
+  })
+}
+
 const STATUS_LABELS = {
   DRAFT: 'Draft',
   FUNCTIONAL_EVALUATION_PENDING: 'Awaiting Documents',
-  DD_SENT_UNOPENED: 'Questionnaire Sent',
+  PENDING_DISPATCH: 'Pending Dispatch',
   DD_IN_PROGRESS: 'Questionnaire In Progress',
   RISK_ASSESSMENT_PENDING: 'Risk Assessment Pending',
   CLOSED: 'Closed',
@@ -36,13 +44,22 @@ const STATUS_LABELS = {
 const STATUS_COLORS = {
   DRAFT: 'var(--status-draft)',
   FUNCTIONAL_EVALUATION_PENDING: 'var(--status-ir-pending)',
-  DD_SENT_UNOPENED: 'var(--status-dd-sent)',
+  PENDING_DISPATCH: 'var(--status-pending-dispatch)',
   DD_IN_PROGRESS: 'var(--status-dd-progress)',
   RISK_ASSESSMENT_PENDING: 'var(--status-risk-pending)',
   CLOSED: 'var(--status-closed)',
   CLOSED_PENDING_IR_DOCS: 'var(--status-closed-pending)',
   UNDER_REVIEW: 'var(--status-under-review)',
 }
+
+// Statuses where the vendor responses tab is shown (questionnaire has been dispatched)
+const DD_ACTIVE_STATUSES = new Set([
+  'DD_IN_PROGRESS',
+  'RISK_ASSESSMENT_PENDING',
+  'CLOSED',
+  'CLOSED_PENDING_IR_DOCS',
+  'UNDER_REVIEW',
+])
 
 const DOC_TYPES = [
   {
@@ -155,7 +172,6 @@ function UploadZone({ docType, files, onUpload, onDelete, uploading }) {
         />
       </div>
 
-      {/* Drop zone */}
       <div
         style={{
           ...uploadZoneStyles.dropZone,
@@ -176,7 +192,6 @@ function UploadZone({ docType, files, onUpload, onDelete, uploading }) {
         )}
       </div>
 
-      {/* Uploaded files */}
       {matching.length > 0 && (
         <div style={uploadZoneStyles.fileList}>
           {matching.map((f) => (
@@ -203,34 +218,11 @@ function UploadZone({ docType, files, onUpload, onDelete, uploading }) {
 }
 
 const uploadZoneStyles = {
-  wrapper: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 10,
-  },
-  header: {
-    display: 'flex',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
-    gap: 8,
-  },
-  label: {
-    display: 'block',
-    fontSize: 'var(--text-sm)',
-    fontWeight: 500,
-    color: 'var(--text-primary)',
-  },
-  required: {
-    color: 'var(--risk-high)',
-    marginLeft: 3,
-  },
-  hint: {
-    display: 'block',
-    fontSize: 'var(--text-xs)',
-    color: 'var(--text-muted)',
-    marginTop: 2,
-    lineHeight: 1.5,
-  },
+  wrapper: { display: 'flex', flexDirection: 'column', gap: 10 },
+  header: { display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 },
+  label: { display: 'block', fontSize: 'var(--text-sm)', fontWeight: 500, color: 'var(--text-primary)' },
+  required: { color: 'var(--risk-high)', marginLeft: 3 },
+  hint: { display: 'block', fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginTop: 2, lineHeight: 1.5 },
   dropZone: {
     borderRadius: 'var(--radius-sm)',
     border: '1.5px dashed',
@@ -239,58 +231,166 @@ const uploadZoneStyles = {
     cursor: 'pointer',
     transition: 'border-color 150ms ease, background 150ms ease',
   },
-  dropText: {
+  dropText: { fontSize: 'var(--text-sm)', color: 'var(--text-muted)' },
+  fileList: { display: 'flex', flexDirection: 'column', gap: 4 },
+  fileRow: {
+    display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px',
+    background: 'var(--bg-subtle)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)',
+  },
+  fileIcon: { fontSize: 13, flexShrink: 0 },
+  fileName: { fontSize: 'var(--text-sm)', color: 'var(--text-primary)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  fileSize: { fontSize: 'var(--text-xs)', color: 'var(--text-muted)', flexShrink: 0 },
+  deleteBtn: {
+    background: 'transparent', border: 'none', color: 'var(--text-muted)',
+    fontSize: 18, lineHeight: 1, cursor: 'pointer', padding: '0 2px',
+    display: 'flex', alignItems: 'center', flexShrink: 0, transition: 'color 150ms ease',
+  },
+  totals: { fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginTop: 2 },
+}
+
+// ─── VendorResponsesTab ──────────────────────────────────────────────────────
+
+function VendorResponsesTab({ token, accessToken, onLogout }) {
+  const [responses, setResponses] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+
+  const fetchResponses = useCallback(async () => {
+    try {
+      const res = await apiFetch(`/api/evaluation/engagements/${token}/responses`, accessToken)
+      if (res.status === 401 || res.status === 403) { onLogout(); return }
+      if (!res.ok) throw new Error('Failed to load responses')
+      const data = await res.json()
+      setResponses(data)
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }, [token, accessToken, onLogout])
+
+  useEffect(() => { fetchResponses() }, [fetchResponses])
+
+  if (loading) {
+    return <div style={rvStyles.placeholder}>Loading responses…</div>
+  }
+  if (error) {
+    return <div style={{ ...rvStyles.placeholder, color: 'var(--risk-high)' }}>{error}</div>
+  }
+  if (!responses || responses.length === 0) {
+    return (
+      <div className="card" style={{ padding: '32px 24px', textAlign: 'center' }}>
+        <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-muted)', margin: 0 }}>
+          No responses yet — the vendor has not entered any answers.
+        </p>
+      </div>
+    )
+  }
+
+  // Group by section, preserving order
+  const sections = []
+  const sectionMap = {}
+  for (const r of responses) {
+    if (!sectionMap[r.section]) {
+      sectionMap[r.section] = []
+      sections.push(r.section)
+    }
+    sectionMap[r.section].push(r)
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {sections.map((section) => (
+        <div key={section} className="card" style={{ padding: 0, overflow: 'hidden' }}>
+          <div style={rvStyles.sectionHeader}>{section}</div>
+          <div style={{ display: 'flex', flexDirection: 'column' }}>
+            {sectionMap[section].map((r, idx) => (
+              <div
+                key={r.id}
+                style={{
+                  ...rvStyles.row,
+                  background: idx % 2 === 0 ? 'var(--bg-surface)' : 'var(--bg-subtle)',
+                }}
+              >
+                <div style={rvStyles.qNum}>Q{r.question_number}</div>
+                <div style={rvStyles.qBody}>
+                  <div style={rvStyles.qText}>{r.question_text}</div>
+                  {r.response_text ? (
+                    <div style={rvStyles.answer}>{r.response_text}</div>
+                  ) : r.selected_options && r.selected_options.length > 0 ? (
+                    <div style={rvStyles.answer}>{r.selected_options.join(', ')}</div>
+                  ) : (
+                    <div style={rvStyles.noAnswer}>No answer entered</div>
+                  )}
+                  <div style={rvStyles.meta}>Last updated {formatDate(r.updated_at)}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+const rvStyles = {
+  placeholder: {
+    padding: '32px 24px',
+    textAlign: 'center',
     fontSize: 'var(--text-sm)',
     color: 'var(--text-muted)',
   },
-  fileList: {
+  sectionHeader: {
+    padding: '10px 20px',
+    background: 'var(--bg-subtle)',
+    borderBottom: '1px solid var(--border)',
+    fontSize: 'var(--text-xs)',
+    fontWeight: 500,
+    color: 'var(--text-secondary)',
+    textTransform: 'uppercase',
+    letterSpacing: '0.04em',
+  },
+  row: {
+    display: 'flex',
+    gap: 16,
+    padding: '14px 20px',
+    borderBottom: '1px solid var(--border)',
+  },
+  qNum: {
+    fontSize: 'var(--text-xs)',
+    fontWeight: 600,
+    color: 'var(--text-muted)',
+    minWidth: 28,
+    paddingTop: 2,
+    flexShrink: 0,
+  },
+  qBody: {
+    flex: 1,
     display: 'flex',
     flexDirection: 'column',
-    gap: 4,
+    gap: 6,
+    minWidth: 0,
   },
-  fileRow: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 8,
-    padding: '6px 10px',
-    background: 'var(--bg-subtle)',
-    borderRadius: 'var(--radius-sm)',
-    border: '1px solid var(--border)',
+  qText: {
+    fontSize: 'var(--text-sm)',
+    color: 'var(--text-secondary)',
+    lineHeight: 1.5,
   },
-  fileIcon: {
-    fontSize: 13,
-    flexShrink: 0,
-  },
-  fileName: {
+  answer: {
     fontSize: 'var(--text-sm)',
     color: 'var(--text-primary)',
-    flex: 1,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
+    lineHeight: 1.6,
+    whiteSpace: 'pre-wrap',
+    wordBreak: 'break-word',
   },
-  fileSize: {
+  noAnswer: {
     fontSize: 'var(--text-xs)',
     color: 'var(--text-muted)',
-    flexShrink: 0,
+    fontStyle: 'italic',
   },
-  deleteBtn: {
-    background: 'transparent',
-    border: 'none',
-    color: 'var(--text-muted)',
-    fontSize: 18,
-    lineHeight: 1,
-    cursor: 'pointer',
-    padding: '0 2px',
-    display: 'flex',
-    alignItems: 'center',
-    flexShrink: 0,
-    transition: 'color 150ms ease',
-  },
-  totals: {
+  meta: {
     fontSize: 'var(--text-xs)',
     color: 'var(--text-muted)',
-    marginTop: 2,
   },
 }
 
@@ -317,6 +417,7 @@ function PortalContent({ token, session, onLogout }) {
   const [uploading, setUploading] = useState(null)
   const [uploadError, setUploadError] = useState('')
   const [savedMsg, setSavedMsg] = useState('')
+  const [activeTab, setActiveTab] = useState('documents')
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -407,6 +508,7 @@ function PortalContent({ token, session, onLogout }) {
 
   const statusLabel = STATUS_LABELS[engagement?.status] || engagement?.status
   const statusColor = STATUS_COLORS[engagement?.status] || 'var(--text-muted)'
+  const showResponsesTab = DD_ACTIVE_STATUSES.has(engagement?.status)
 
   return (
     <div style={portalStyles.page}>
@@ -419,14 +521,6 @@ function PortalContent({ token, session, onLogout }) {
             <span style={portalStyles.headerPortal}>IT Representative Portal</span>
           </div>
           <div style={portalStyles.headerRight}>
-            {engagement && (
-              <span
-                className="badge"
-                style={{ background: statusColor + '20', color: statusColor }}
-              >
-                {statusLabel}
-              </span>
-            )}
             <ThemeToggle />
             <button
               className="btn btn-secondary"
@@ -459,7 +553,7 @@ function PortalContent({ token, session, onLogout }) {
                   <span style={portalStyles.fieldLabel}>Status</span>
                   <span
                     className="badge"
-                    style={{ background: statusColor + '20', color: statusColor }}
+                    style={{ border: `1px solid ${statusColor}`, color: statusColor, alignSelf: 'flex-start' }}
                   >
                     {statusLabel}
                   </span>
@@ -469,7 +563,7 @@ function PortalContent({ token, session, onLogout }) {
                     <span style={portalStyles.fieldLabel}>AI Application</span>
                     <span
                       className="badge"
-                      style={{ background: 'var(--blue-subtle)', color: 'var(--blue)' }}
+                      style={{ background: 'var(--blue-subtle)', color: 'var(--blue)', alignSelf: 'flex-start' }}
                     >
                       AI Addendum Required
                     </span>
@@ -486,41 +580,75 @@ function PortalContent({ token, session, onLogout }) {
             </div>
           )}
 
-          {/* Document upload panel */}
-          <div className="card" style={portalStyles.docsCard}>
-            <div style={portalStyles.cardTitle}>
-              <span>Pre-DD Documents</span>
-              {savedMsg && (
-                <span style={portalStyles.savedMsg}>✓ {savedMsg}</span>
-              )}
-            </div>
-
-            {uploadError && (
-              <div style={portalStyles.uploadError}>{uploadError}</div>
+          {/* Tabs */}
+          <div style={portalStyles.tabBar}>
+            <button
+              style={{
+                ...portalStyles.tabBtn,
+                ...(activeTab === 'documents' ? portalStyles.tabBtnActive : {}),
+              }}
+              onClick={() => setActiveTab('documents')}
+            >
+              Pre-DD Documents
+            </button>
+            {showResponsesTab && (
+              <button
+                style={{
+                  ...portalStyles.tabBtn,
+                  ...(activeTab === 'responses' ? portalStyles.tabBtnActive : {}),
+                }}
+                onClick={() => setActiveTab('responses')}
+              >
+                Vendor Responses
+              </button>
             )}
-
-            <div style={portalStyles.docList}>
-              {DOC_TYPES.map((dt, i) => (
-                <React.Fragment key={dt.key}>
-                  {i > 0 && <div style={portalStyles.divider} />}
-                  <UploadZone
-                    docType={dt}
-                    files={files}
-                    onUpload={handleUpload}
-                    onDelete={handleDelete}
-                    uploading={uploading}
-                  />
-                </React.Fragment>
-              ))}
-            </div>
-
-            <div style={portalStyles.fileStats}>
-              <span>
-                {files.length} / 20 files uploaded ·{' '}
-                {formatBytes(files.reduce((s, f) => s + f.file_size_bytes, 0))} / 100 MB used
-              </span>
-            </div>
           </div>
+
+          {/* Tab content */}
+          {activeTab === 'documents' && (
+            <div className="card" style={portalStyles.docsCard}>
+              <div style={portalStyles.cardTitle}>
+                <span>Pre-DD Documents</span>
+                {savedMsg && (
+                  <span style={portalStyles.savedMsg}>✓ {savedMsg}</span>
+                )}
+              </div>
+
+              {uploadError && (
+                <div style={portalStyles.uploadError}>{uploadError}</div>
+              )}
+
+              <div style={portalStyles.docList}>
+                {DOC_TYPES.map((dt, i) => (
+                  <React.Fragment key={dt.key}>
+                    {i > 0 && <div style={portalStyles.divider} />}
+                    <UploadZone
+                      docType={dt}
+                      files={files}
+                      onUpload={handleUpload}
+                      onDelete={handleDelete}
+                      uploading={uploading}
+                    />
+                  </React.Fragment>
+                ))}
+              </div>
+
+              <div style={portalStyles.fileStats}>
+                <span>
+                  {files.length} / 20 files uploaded ·{' '}
+                  {formatBytes(files.reduce((s, f) => s + f.file_size_bytes, 0))} / 100 MB used
+                </span>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'responses' && showResponsesTab && (
+            <VendorResponsesTab
+              token={token}
+              accessToken={session.accessToken}
+              onLogout={onLogout}
+            />
+          )}
 
           {/* Signed in as */}
           <p style={portalStyles.signedInAs}>
@@ -533,18 +661,8 @@ function PortalContent({ token, session, onLogout }) {
 }
 
 const portalStyles = {
-  page: {
-    minHeight: '100vh',
-    display: 'flex',
-    flexDirection: 'column',
-    background: 'var(--bg-primary)',
-  },
-  loadingPage: {
-    minHeight: '100vh',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+  page: { minHeight: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--bg-primary)' },
+  loadingPage: { minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' },
   header: {
     background: 'var(--bg-surface)',
     borderBottom: '1px solid var(--border)',
@@ -563,72 +681,18 @@ const portalStyles = {
     justifyContent: 'space-between',
     gap: 16,
   },
-  headerLeft: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 10,
-    minWidth: 0,
-  },
-  wordmark: {
-    fontSize: 'var(--text-md)',
-    fontWeight: 600,
-    color: 'var(--accent)',
-    letterSpacing: '-0.01em',
-    flexShrink: 0,
-  },
-  headerSep: {
-    color: 'var(--border-strong)',
-    flexShrink: 0,
-  },
-  headerPortal: {
-    fontSize: 'var(--text-sm)',
-    color: 'var(--text-secondary)',
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-  },
-  headerRight: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 10,
-    flexShrink: 0,
-  },
-  main: {
-    flex: 1,
-    padding: '32px 24px 64px',
-  },
-  content: {
-    maxWidth: 760,
-    margin: '0 auto',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 20,
-  },
-  engagementCard: {
-    padding: '20px 24px',
-  },
-  engagementGrid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
-    gap: '12px 20px',
-  },
-  engagementField: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 4,
-  },
-  fieldLabel: {
-    fontSize: 'var(--text-xs)',
-    fontWeight: 500,
-    color: 'var(--text-muted)',
-    textTransform: 'uppercase',
-    letterSpacing: '0.04em',
-  },
-  fieldValue: {
-    fontSize: 'var(--text-sm)',
-    color: 'var(--text-primary)',
-    fontWeight: 500,
-  },
+  headerLeft: { display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 },
+  wordmark: { fontSize: 'var(--text-md)', fontWeight: 600, color: 'var(--accent)', letterSpacing: '-0.01em', flexShrink: 0 },
+  headerSep: { color: 'var(--border-strong)', flexShrink: 0 },
+  headerPortal: { fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  headerRight: { display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 },
+  main: { flex: 1, padding: '32px 24px 64px' },
+  content: { maxWidth: 760, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 20 },
+  engagementCard: { padding: '20px 24px' },
+  engagementGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '12px 20px' },
+  engagementField: { display: 'flex', flexDirection: 'column', gap: 4 },
+  fieldLabel: { fontSize: 'var(--text-xs)', fontWeight: 500, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' },
+  fieldValue: { fontSize: 'var(--text-sm)', color: 'var(--text-primary)', fontWeight: 500 },
   infoNotice: {
     marginTop: 16,
     padding: '10px 14px',
@@ -639,10 +703,28 @@ const portalStyles = {
     color: 'var(--blue)',
     lineHeight: 1.6,
   },
-  docsCard: {
-    padding: 0,
-    overflow: 'hidden',
+  tabBar: {
+    display: 'flex',
+    gap: 2,
+    borderBottom: '1px solid var(--border)',
   },
+  tabBtn: {
+    padding: '8px 16px',
+    fontSize: 'var(--text-sm)',
+    fontWeight: 500,
+    color: 'var(--text-secondary)',
+    background: 'transparent',
+    border: 'none',
+    borderBottom: '2px solid transparent',
+    marginBottom: -1,
+    cursor: 'pointer',
+    transition: 'color 150ms ease, border-color 150ms ease',
+  },
+  tabBtnActive: {
+    color: 'var(--accent)',
+    borderBottomColor: 'var(--accent)',
+  },
+  docsCard: { padding: 0, overflow: 'hidden' },
   cardTitle: {
     display: 'flex',
     alignItems: 'center',
@@ -653,11 +735,7 @@ const portalStyles = {
     fontWeight: 600,
     color: 'var(--text-primary)',
   },
-  savedMsg: {
-    fontSize: 'var(--text-xs)',
-    color: 'var(--risk-low)',
-    animation: 'fadeIn 150ms ease',
-  },
+  savedMsg: { fontSize: 'var(--text-xs)', color: 'var(--risk-low)', animation: 'fadeIn 150ms ease' },
   uploadError: {
     margin: '12px 24px 0',
     padding: '8px 12px',
@@ -667,16 +745,8 @@ const portalStyles = {
     fontSize: 'var(--text-sm)',
     color: 'var(--risk-high)',
   },
-  docList: {
-    padding: '16px 24px',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 20,
-  },
-  divider: {
-    height: 1,
-    background: 'var(--border)',
-  },
+  docList: { padding: '16px 24px', display: 'flex', flexDirection: 'column', gap: 20 },
+  divider: { height: 1, background: 'var(--border)' },
   fileStats: {
     padding: '10px 24px',
     borderTop: '1px solid var(--border)',
@@ -684,9 +754,5 @@ const portalStyles = {
     fontSize: 'var(--text-xs)',
     color: 'var(--text-muted)',
   },
-  signedInAs: {
-    fontSize: 'var(--text-xs)',
-    color: 'var(--text-muted)',
-    textAlign: 'center',
-  },
+  signedInAs: { fontSize: 'var(--text-xs)', color: 'var(--text-muted)', textAlign: 'center' },
 }

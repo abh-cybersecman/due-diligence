@@ -438,7 +438,7 @@ Alembic migrations run automatically on backend startup via an entrypoint script
 ```
 DRAFT
 FUNCTIONAL_EVALUATION_PENDING
-DD_SENT_UNOPENED
+PENDING_DISPATCH
 DD_IN_PROGRESS
 RISK_ASSESSMENT_PENDING
 CLOSED
@@ -650,13 +650,12 @@ DRAFT
   → FUNCTIONAL_EVALUATION_PENDING     (admin triggers manually via /advance)
 
 FUNCTIONAL_EVALUATION_PENDING
-  → DD_SENT_UNOPENED                  (automatic: when functional evaluation file is uploaded by IR)
+  → PENDING_DISPATCH                  (automatic: when functional evaluation file is uploaded by IR)
 
-DD_SENT_UNOPENED
-  → DD_IN_PROGRESS                    (automatic: when vendor saves first response)
+PENDING_DISPATCH
+  → DD_IN_PROGRESS                    (admin clicks "Dispatch to Vendor")
 
 DD_IN_PROGRESS
-  → DD_SENT_UNOPENED                  (if vendor deletes all responses — edge case)
   → RISK_ASSESSMENT_PENDING           (automatic: when vendor submits)
 
 RISK_ASSESSMENT_PENDING
@@ -674,7 +673,7 @@ UNDER_REVIEW
   → CLOSED or CLOSED_PENDING_IR_DOCS  (admin manually closes again — check IR doc status)
 ```
 
-Vendor form is editable only in: `DD_SENT_UNOPENED`, `DD_IN_PROGRESS`.
+Vendor form is editable only in: `DD_IN_PROGRESS`.
 Vendor form is read-only in all other statuses.
 IR can upload documents in any status.
 Admin can edit structured fields, risk assessment, and internal notes in any status.
