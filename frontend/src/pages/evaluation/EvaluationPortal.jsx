@@ -583,20 +583,14 @@ function PortalContent({ token, session, onLogout }) {
           {/* Tabs */}
           <div style={portalStyles.tabBar}>
             <button
-              style={{
-                ...portalStyles.tabBtn,
-                ...(activeTab === 'documents' ? portalStyles.tabBtnActive : {}),
-              }}
+              className={activeTab === 'documents' ? 'tab-btn tab-btn--active' : 'tab-btn'}
               onClick={() => setActiveTab('documents')}
             >
               Pre-DD Documents
             </button>
             {showResponsesTab && (
               <button
-                style={{
-                  ...portalStyles.tabBtn,
-                  ...(activeTab === 'responses' ? portalStyles.tabBtnActive : {}),
-                }}
+                className={activeTab === 'responses' ? 'tab-btn tab-btn--active' : 'tab-btn'}
                 onClick={() => setActiveTab('responses')}
               >
                 Vendor Responses
@@ -705,24 +699,7 @@ const portalStyles = {
   },
   tabBar: {
     display: 'flex',
-    gap: 2,
     borderBottom: '1px solid var(--border)',
-  },
-  tabBtn: {
-    padding: '8px 16px',
-    fontSize: 'var(--text-sm)',
-    fontWeight: 500,
-    color: 'var(--text-secondary)',
-    background: 'transparent',
-    border: 'none',
-    borderBottom: '2px solid transparent',
-    marginBottom: -1,
-    cursor: 'pointer',
-    transition: 'color 150ms ease, border-color 150ms ease',
-  },
-  tabBtnActive: {
-    color: 'var(--accent)',
-    borderBottomColor: 'var(--accent)',
   },
   docsCard: { padding: 0, overflow: 'hidden' },
   cardTitle: {
