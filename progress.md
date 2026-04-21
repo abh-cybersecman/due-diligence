@@ -42,6 +42,11 @@
 
 ### Frontend (IR + vendor portals) `8564d21`
 
+### Hotfix: passlib → bcrypt direct `6d50c8a`
+
+- **Root cause** — `passlib 1.7.4` is incompatible with `bcrypt >= 4.0.0`; its internal wrap-bug detection test raises `ValueError` on any login attempt, returning 500 instead of 401
+- **Fix** — removed passlib entirely; replaced with `bcrypt==4.2.1` used directly (`bcrypt.checkpw()` / `bcrypt.hashpw()`); hash format (`$2b$...`) is identical so existing hashes remain valid
+
 ### Hotfix: Geist font loading `eb9e55b`
 
 - **Root cause** — `geist@1.3.1` ships only `.woff2` files; no CSS exists at `dist/geist.css` or `dist/geist-mono.css` (package is designed for Next.js font API)
