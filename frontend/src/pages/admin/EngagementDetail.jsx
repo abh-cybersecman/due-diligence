@@ -232,8 +232,28 @@ function OverviewTab({ engagement, apiFetch, onRefresh }) {
               </div>
             )}
             <InfoRow label="AI Application" value={engagement.is_ai_application ? 'Yes' : 'No'} />
-            <InfoRow label="Vendor Emails" value={engagement.vendor_emails.join(', ') || '—'} />
-            <InfoRow label="IR Emails" value={engagement.ir_emails.join(', ') || '—'} />
+            <EmailEditRow
+              label="Vendor Emails"
+              emails={engagement.vendor_emails}
+              onSave={async (emails) => {
+                const res = await apiFetch(`/api/admin/engagements/${engagement.id}`, {
+                  method: 'PATCH',
+                  body: JSON.stringify({ vendor_emails: emails }),
+                })
+                if (res.ok) onRefresh()
+              }}
+            />
+            <EmailEditRow
+              label="IR Emails"
+              emails={engagement.ir_emails}
+              onSave={async (emails) => {
+                const res = await apiFetch(`/api/admin/engagements/${engagement.id}`, {
+                  method: 'PATCH',
+                  body: JSON.stringify({ ir_emails: emails }),
+                })
+                if (res.ok) onRefresh()
+              }}
+            />
             <TokenRow label="Vendor Token" token={engagement.vendor_token} urlPath="/respond" />
             <TokenRow label="IR Token" token={engagement.ir_token} urlPath="/evaluation" />
             <InfoRow label="Created" value={formatDate(engagement.created_at)} />
@@ -288,6 +308,131 @@ function InfoRow({ label, value }) {
       <span style={s.infoValue}>{value}</span>
     </div>
   )
+}
+
+function EmailEditRow({ label, emails, onSave }) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState([])
+  const [input, setInput] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const inputRef = useRef(null)
+
+  function startEdit() {
+    setDraft([...emails])
+    setInput('')
+    setError('')
+    setEditing(true)
+    setTimeout(() => inputRef.current?.focus(), 50)
+  }
+
+  function addEmail() {
+    const val = input.trim().toLowerCase()
+    if (!val) return
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val)) { setError('Invalid email address'); return }
+    if (draft.includes(val)) { setError('Already in list'); return }
+    setDraft(d => [...d, val])
+    setInput('')
+    setError('')
+  }
+
+  function removeEmail(email) {
+    setDraft(d => d.filter(e => e !== email))
+  }
+
+  function handleKeyDown(e) {
+    if (e.key === 'Enter') { e.preventDefault(); addEmail() }
+    if (e.key === 'Escape') cancel()
+  }
+
+  function cancel() {
+    setEditing(false)
+    setInput('')
+    setError('')
+  }
+
+  async function save() {
+    setSaving(true)
+    await onSave(draft)
+    setSaving(false)
+    setEditing(false)
+  }
+
+  if (!editing) {
+    return (
+      <div style={s.infoRow}>
+        <span style={s.infoLabel}>{label}</span>
+        <span style={{ ...s.infoValue, display: 'flex', alignItems: 'center', gap: 8, flex: 1, flexWrap: 'wrap' }}>
+          <span>{emails.length > 0 ? emails.join(', ') : '—'}</span>
+          <button
+            onClick={startEdit}
+            style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '1px 7px', fontSize: 'var(--text-xs)', cursor: 'pointer', color: 'var(--text-muted)', flexShrink: 0 }}
+          >
+            Edit
+          </button>
+        </span>
+      </div>
+    )
+  }
+
+  return (
+    <div style={s.infoRow}>
+      <span style={s.infoLabel}>{label}</span>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {draft.length > 0 && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {draft.map(email => (
+              <span key={email} style={emailChipStyle}>
+                {email}
+                <button onClick={() => removeEmail(email)} style={emailChipRemoveStyle} title="Remove">×</button>
+              </span>
+            ))}
+          </div>
+        )}
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          <input
+            ref={inputRef}
+            className="input"
+            value={input}
+            onChange={e => { setInput(e.target.value); setError('') }}
+            onKeyDown={handleKeyDown}
+            placeholder="email@example.com"
+            style={{ height: 28, fontSize: 'var(--text-sm)', flex: 1, minWidth: 0 }}
+          />
+          <button className="btn btn-secondary" onClick={addEmail} style={{ height: 28, padding: '0 10px', fontSize: 'var(--text-xs)', flexShrink: 0 }}>Add</button>
+          <button className="btn btn-primary" onClick={save} disabled={saving} style={{ height: 28, padding: '0 10px', fontSize: 'var(--text-xs)', flexShrink: 0 }}>
+            {saving ? 'Saving…' : 'Save'}
+          </button>
+          <button className="btn btn-secondary" onClick={cancel} style={{ height: 28, padding: '0 10px', fontSize: 'var(--text-xs)', flexShrink: 0 }}>Cancel</button>
+        </div>
+        {error && <span style={{ fontSize: 'var(--text-xs)', color: 'var(--risk-high)' }}>{error}</span>}
+      </div>
+    </div>
+  )
+}
+
+const emailChipStyle = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 4,
+  padding: '2px 8px 2px 8px',
+  background: 'var(--bg-subtle)',
+  border: '1px solid var(--border)',
+  borderRadius: 100,
+  fontSize: 'var(--text-xs)',
+  color: 'var(--text-primary)',
+}
+
+const emailChipRemoveStyle = {
+  background: 'none',
+  border: 'none',
+  cursor: 'pointer',
+  color: 'var(--text-muted)',
+  fontSize: 14,
+  lineHeight: 1,
+  padding: 0,
+  display: 'flex',
+  alignItems: 'center',
 }
 
 function TokenRow({ label, token, urlPath }) {

@@ -851,6 +851,7 @@ Vendor and IR routes prompt for email verification before showing any content.
 - [x] Word export (python-docx, full template)
 - [x] "Generate with AI" button on risk assessment (disabled with tooltip)
 - [x] Admin can edit all fields (structured, risk assessment, notes) at any lifecycle stage
+- [x] Admin can add/remove vendor and IR emails inline from the engagement detail (EmailEditRow with chip UI, format validation, PATCH endpoint)
 - [ ] Database backup (pg_dump + tar.gz + download) — deferred to Phase 3
 
 ### Phase 3 — Wire AI + Notifications + Backup

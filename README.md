@@ -32,6 +32,9 @@ DRAFT
 
 `CLOSED_PENDING_IR_DOCS` auto-resolves to `CLOSED` the moment both NDA and SOW are uploaded by IR.
 
+**Engagement Details panel**
+Vendor and IR email lists are editable inline — click Edit next to either field to enter edit mode. Add emails one at a time (Enter or Add button, with format validation and duplicate detection); remove individual emails via the chip × button; Save commits via `PATCH /api/admin/engagements/{id}`.
+
 **Structured fields panel**
 Nine key technical fields extracted from the questionnaire responses (service type, hosting location, hyperscaler, DR location, data residency, encryption at rest/in transit, MFA support). All editable by admin at any lifecycle stage. "Extract with AI" button is present and will be wired to the Claude API in Phase 3.
 

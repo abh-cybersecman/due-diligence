@@ -93,7 +93,7 @@
 - **Dashboard** (`pages/admin/Dashboard.jsx`) — paginated engagement table (50/page); columns: document number (Geist Mono, blue), application name, operating companies, status badge, AI badge, created date, submitted date; status filter dropdown; search-by-name form; row click navigates to detail
 - **New Engagement** (`pages/admin/NewEngagement.jsx`) — application name input; OC checkboxes (loaded from settings); `EmailTagInput` chip component for vendor_emails and ir_emails (Enter/comma adds, Backspace removes, blur commits); AI application checkbox; internal notes textarea; client-side validation before submit
 - **Engagement Detail** (`pages/admin/EngagementDetail.jsx`) — four-tab layout:
-  - *Overview* — engagement info grid (doc number, status badge, dates, vendor/IR emails, tokens); 9-field structured fields grid with Save button and disabled "Extract with AI" `AIButton` with tooltip
+  - *Overview* — engagement info grid (doc number, status badge, dates, vendor/IR emails with inline `EmailEditRow` editor, tokens); 9-field structured fields grid with Save button and disabled "Extract with AI" `AIButton` with tooltip
   - *Risk Assessment* — create button if no RA; form with overall rating select and summary textarea; risk items list with `RiskItemRow` (description, rating select, assignee multi-select chip dropdown with outside-click close, mitigation textarea); add/remove items; Save Draft, Finalise, Reopen buttons; disabled "Generate with AI" `AIButton`
   - *Responses* — read-only question/answer list grouped by section; file download links for FILE_UPLOAD responses
   - *Audit Log* — paginated table (actor, type, action, description, timestamp)
@@ -118,6 +118,10 @@
 - **Removed auto-advancement in vendor save** — the backend no longer advances status on first vendor save (it was already `DD_IN_PROGRESS`). Frontend lifecycle-advancement block in `VendorQuestionnaire.jsx` removed accordingly.
 - **IR portal: Vendor Responses tab** — two-tab layout added to `EvaluationPortal.jsx`. Tab 1: Pre-DD Documents (unchanged). Tab 2: Vendor Responses — visible from `DD_IN_PROGRESS` onwards; fetches `GET /api/evaluation/engagements/{token}/responses`; grouped by section; shows Q-number, question text, vendor answer (or "No answer entered"), and last-updated timestamp per response.
 - **`0001_initial_schema.py`** — `DD_SENT_UNOPENED` removed from the `engagementstatus` enum definition. Existing DB must be wiped and rebuilt (`docker compose down -v && docker compose up --build`).
+
+### Inline email editing in Engagement Detail
+
+- **`EmailEditRow` component** — replaces the static `InfoRow` for Vendor Emails and IR Emails in `EngagementDetail.jsx`. View mode shows current addresses with an Edit button. Edit mode shows each address as a removable chip; a text input with Enter/Add adds new addresses with format validation and duplicate detection; Save PATCHes `{ vendor_emails }` or `{ ir_emails }` to `/api/admin/engagements/{id}` and refreshes the engagement. No backend changes required.
 
 ---
 
