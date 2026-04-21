@@ -127,22 +127,22 @@ async def upload_file(
         metadata={"file_type": file_type.value, "filename": file.filename},
     )
 
-    # Lifecycle trigger: functional evaluation upload advances engagement
+    # Lifecycle trigger: functional evaluation upload moves to Pending Dispatch
     if (
         file_type == FileType.IR_FUNCTIONAL_EVALUATION
         and engagement.status == EngagementStatus.FUNCTIONAL_EVALUATION_PENDING
     ):
-        engagement.status = EngagementStatus.DD_SENT_UNOPENED
+        engagement.status = EngagementStatus.PENDING_DISPATCH
         await log_action(
             db,
             actor="system",
             actor_type=ActorType.IR,
             action="engagement.status.advanced",
-            description=f"Engagement {engagement.doc_number} advanced to DD_SENT_UNOPENED after functional evaluation upload",
+            description=f"Engagement {engagement.doc_number} advanced to PENDING_DISPATCH after functional evaluation upload",
             engagement_id=engagement.id,
             metadata={
                 "from": EngagementStatus.FUNCTIONAL_EVALUATION_PENDING.value,
-                "to": EngagementStatus.DD_SENT_UNOPENED.value,
+                "to": EngagementStatus.PENDING_DISPATCH.value,
             },
         )
 
@@ -197,6 +197,18 @@ async def delete_file(
     record = result.scalar_one_or_none()
     if not record:
         raise HTTPException(404, "File not found")
+
+    # Functional evaluation is locked once the vendor link has been dispatched
+    _locked_statuses = {
+        EngagementStatus.DD_SENT_UNOPENED,
+        EngagementStatus.DD_IN_PROGRESS,
+        EngagementStatus.RISK_ASSESSMENT_PENDING,
+        EngagementStatus.CLOSED,
+        EngagementStatus.CLOSED_PENDING_IR_DOCS,
+        EngagementStatus.UNDER_REVIEW,
+    }
+    if record.file_type == FileType.IR_FUNCTIONAL_EVALUATION and engagement.status in _locked_statuses:
+        raise HTTPException(403, "Functional evaluation cannot be deleted after the questionnaire has been dispatched to the vendor")
 
     actor_email = ir_user["sub"]
 

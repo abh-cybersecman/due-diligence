@@ -41,6 +41,7 @@
 
   --status-draft:          #718096;
   --status-ir-pending:     #2E75B6;
+  --status-pending-dispatch: #0891B2;
   --status-dd-sent:        #805AD5;
   --status-dd-progress:    #D69E2E;
   --status-risk-pending:   #DD6B20;
@@ -126,9 +127,44 @@ body {
   min-height: 100%;
 }
 
+/* ── Button reset ─────────────────────────────────────── */
+button {
+  -webkit-appearance: none;
+  appearance: none;
+  outline: none;
+}
+
 /* ── Interactive transitions ─────────────────────────── */
 button, input, textarea, select, a {
   transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease;
+}
+
+/* ── Tab buttons ─────────────────────────────────────── */
+.tab-btn {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 8px 16px;
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--text-secondary);
+  cursor: pointer;
+  margin-bottom: -1px;
+  font-family: inherit;
+  text-decoration: none;
+  transition: color 150ms ease;
+}
+
+.tab-btn:hover {
+  color: var(--text-primary);
+  border-bottom-color: transparent;
+  background: none;
+}
+
+.tab-btn--active,
+.tab-btn--active:hover {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
 }
 
 /* ── Fade-in ─────────────────────────────────────────── */

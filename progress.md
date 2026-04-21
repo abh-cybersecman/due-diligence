@@ -34,7 +34,7 @@
 - **OC list + assignees CRUD** — full CRUD at `/api/admin/settings/oc-list` and `/api/admin/settings/assignees`; duplicate OC name → 409; all mutations audit-logged
 - **Audit log query endpoints** — `GET /api/admin/audit` (system-wide, paginated); `GET /api/admin/engagements/{id}/audit` (per-engagement, paginated)
 - **Pydantic schemas** — `schemas/auth.py`, `schemas/engagement.py` (admin + IR), `schemas/settings.py`, `schemas/vendor.py`, `schemas/audit.py` (metadata_ → metadata alias for JSON output)
-- **IR portal backend** — `POST /api/evaluation/auth/verify`: scoped JWT (type=ir, engagement_id), generic 401, failures audit-logged; `GET /{token}/status` (engagement info + uploaded IR docs); `GET /{token}/responses` (read-only); `POST /{token}/files`: magic-byte validation, Pillow verify() on images, UUID4 filename, count/total limits checked before disk write, lifecycle trigger FUNCTIONAL_EVALUATION_PENDING → DD_SENT_UNOPENED on functional eval upload; `DELETE /{token}/files/{id}` — JWT scope enforced on every request
+- **IR portal backend** — `POST /api/evaluation/auth/verify`: scoped JWT (type=ir, engagement_id), generic 401, failures audit-logged; `GET /{token}/status` (engagement info + uploaded IR docs); `GET /{token}/responses` (read-only); `POST /{token}/files`: magic-byte validation, Pillow verify() on images, UUID4 filename, count/total limits checked before disk write, lifecycle trigger FUNCTIONAL_EVALUATION_PENDING → PENDING_DISPATCH on functional eval upload; `DELETE /{token}/files/{id}` — JWT scope enforced on every request
 - **Vendor portal backend** — `POST /api/vendor/auth/verify`: scoped JWT (type=vendor, engagement_id), generic 401; `GET /{token}` (metadata + questions + uploaded files); `GET /{token}/responses`; `POST /{token}/responses` (upsert autosave, DD_SENT_UNOPENED → DD_IN_PROGRESS on first save); `POST /{token}/files` (same security controls as IR); `DELETE /{token}/files/{id}`; `POST /{token}/submit` (→ RISK_ASSESSMENT_PENDING, sets submitted_at) — JWT scope (engagement_id) enforced on every single endpoint via `get_vendor_engagement()` dependency
 - **File security** — python-magic byte validation before storage; Pillow `img.verify()` on images; UUID4 filename, no extension; written to Docker volumes outside web root; count + total-size limits checked against DB before touching disk; 0o755 directories
 - **Input sanitization** — bleach applied to all vendor/IR text inputs at write time
@@ -97,10 +97,19 @@
   - *Risk Assessment* — create button if no RA; form with overall rating select and summary textarea; risk items list with `RiskItemRow` (description, rating select, assignee multi-select chip dropdown with outside-click close, mitigation textarea); add/remove items; Save Draft, Finalise, Reopen buttons; disabled "Generate with AI" `AIButton`
   - *Responses* — read-only question/answer list grouped by section; file download links for FILE_UPLOAD responses
   - *Audit Log* — paginated table (actor, type, action, description, timestamp)
-  - Lifecycle action buttons conditional on current status: Advance to IR (DRAFT), Reopen Questionnaire (RISK_ASSESSMENT_PENDING), Move to Under Review (CLOSED / CLOSED_PENDING_IR_DOCS), Close / Close Pending (UNDER_REVIEW)
+  - Lifecycle action buttons conditional on current status: Advance to IR Stage (DRAFT), Dispatch to Vendor (PENDING_DISPATCH), Reopen Questionnaire (RISK_ASSESSMENT_PENDING), Move to Under Review (CLOSED / CLOSED_PENDING_IR_DOCS), Close / Close Pending (UNDER_REVIEW)
   - Export button fetches `.docx` blob and triggers browser download
 - **Settings** (`pages/admin/Settings.jsx`) — Operating Companies CRUD (add, inline edit, delete); Assignees CRUD (name + type label); generic error display; all mutations refresh the list
 - **App.jsx** — added `ProtectedAdmin` wrapper; registered `/admin/login`, `/admin/dashboard`, `/admin/engagements/new`, `/admin/engagements/:id`, `/admin/settings`
+
+### Lifecycle refinement: PENDING_DISPATCH + FE deletion lock
+
+- **New `PENDING_DISPATCH` status** — inserted between `FUNCTIONAL_EVALUATION_PENDING` and `DD_SENT_UNOPENED`. IR uploading the functional evaluation now moves the engagement to `PENDING_DISPATCH` rather than directly to `DD_SENT_UNOPENED`. This accurately reflects that the questionnaire is ready but not yet issued.
+- **`POST /api/admin/engagements/{id}/dispatch`** — new admin endpoint; transitions `PENDING_DISPATCH → DD_SENT_UNOPENED`; audit-logged as `engagement.dispatched`.
+- **"Dispatch to Vendor" button** — appears in the engagement detail header when status is `PENDING_DISPATCH`; calls the new dispatch endpoint.
+- **Alembic migration `0002`** — `ALTER TYPE engagementstatus ADD VALUE IF NOT EXISTS 'PENDING_DISPATCH' AFTER 'FUNCTIONAL_EVALUATION_PENDING'`; runs automatically on backend startup.
+- **IR functional evaluation deletion lock** — the FE file is freely deletable while status is `FUNCTIONAL_EVALUATION_PENDING` or `PENDING_DISPATCH` (useful if the wrong file was uploaded). Once the engagement reaches `DD_SENT_UNOPENED` or beyond, attempting to delete the FE returns HTTP 403. NDA and SOW remain freely deletable at any status.
+- **Dashboard + status badge** — `PENDING_DISPATCH` added to `STATUS_LABELS` and `STATUS_COLORS` in both Dashboard and EngagementDetail; rendered in teal (`--status-pending-dispatch: #0891B2`).
 
 ---
 

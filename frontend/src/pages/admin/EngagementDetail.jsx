@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import AdminLayout from '../../components/admin/AdminLayout'
 import { useAuth } from '../../contexts/AuthContext'
 import { BASE_PATH } from '../../config'
+import MultiSelectDropdown from '../../components/shared/MultiSelectDropdown'
 
 // ── Shared helpers ─────────────────────────────────────────────────────────────
 
@@ -25,6 +26,7 @@ function useApiFetch() {
 const STATUS_LABELS = {
   DRAFT: 'Draft',
   FUNCTIONAL_EVALUATION_PENDING: 'IR Docs Pending',
+  PENDING_DISPATCH: 'Pending Dispatch',
   DD_SENT_UNOPENED: 'DD Sent',
   DD_IN_PROGRESS: 'DD In Progress',
   RISK_ASSESSMENT_PENDING: 'Risk Pending',
@@ -35,6 +37,7 @@ const STATUS_LABELS = {
 const STATUS_COLORS = {
   DRAFT: 'var(--status-draft)',
   FUNCTIONAL_EVALUATION_PENDING: 'var(--status-ir-pending)',
+  PENDING_DISPATCH: 'var(--status-pending-dispatch)',
   DD_SENT_UNOPENED: 'var(--status-dd-sent)',
   DD_IN_PROGRESS: 'var(--status-dd-progress)',
   RISK_ASSESSMENT_PENDING: 'var(--status-risk-pending)',
@@ -124,6 +127,10 @@ function OverviewTab({ engagement, apiFetch, onRefresh }) {
   const [sfForm, setSfForm] = useState({})
   const [sfSaving, setSfSaving] = useState(false)
   const [sfSaved, setSfSaved] = useState(false)
+  const [allOcs, setAllOcs] = useState([])
+  const [ocEdit, setOcEdit] = useState(false)
+  const [ocDraft, setOcDraft] = useState([])
+  const [ocSaving, setOcSaving] = useState(false)
 
   const loadSf = useCallback(async () => {
     const res = await apiFetch(`/api/admin/engagements/${engagement.id}/structured-fields`)
@@ -138,6 +145,22 @@ function OverviewTab({ engagement, apiFetch, onRefresh }) {
   }, [apiFetch, engagement.id])
 
   useEffect(() => { loadSf() }, [loadSf])
+
+  useEffect(() => {
+    apiFetch('/api/admin/settings/oc-list').then(r => r.ok ? r.json() : []).then(setAllOcs)
+  }, [apiFetch])
+
+  async function saveOcs() {
+    const names = allOcs.filter(o => ocDraft.includes(o.id)).map(o => o.name)
+    if (!window.confirm(`Update operating companies to:\n${names.length > 0 ? names.join('\n') : '(none)'}?\n\nThis will update the engagement record.`)) return
+    setOcSaving(true)
+    const res = await apiFetch(`/api/admin/engagements/${engagement.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ operating_company_ids: ocDraft }),
+    })
+    if (res.ok) { setOcEdit(false); onRefresh() }
+    setOcSaving(false)
+  }
 
   async function saveSf() {
     setSfSaving(true)
@@ -176,12 +199,45 @@ function OverviewTab({ engagement, apiFetch, onRefresh }) {
           <div style={s.infoGrid}>
             <InfoRow label="Document Number" value={<span style={s.mono}>{engagement.doc_number}</span>} />
             <InfoRow label="Application" value={engagement.application_name} />
-            <InfoRow label="Operating Companies" value={engagement.operating_companies.map(o => o.name).join(', ') || '—'} />
+            {ocEdit ? (
+              <div style={s.infoRow}>
+                <span style={s.infoLabel}>Operating Companies</span>
+                <div style={{ flex: 1, display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                  <div style={{ flex: 1 }}>
+                    <MultiSelectDropdown
+                      items={allOcs}
+                      value={ocDraft}
+                      onChange={setOcDraft}
+                      placeholder="Select operating companies…"
+                    />
+                  </div>
+                  <button className="btn btn-primary" onClick={saveOcs} disabled={ocSaving} style={{ height: 30, padding: '0 10px', fontSize: 'var(--text-xs)', flexShrink: 0 }}>
+                    {ocSaving ? 'Saving…' : 'Save'}
+                  </button>
+                  <button className="btn btn-secondary" onClick={() => setOcEdit(false)} style={{ height: 30, padding: '0 10px', fontSize: 'var(--text-xs)', flexShrink: 0 }}>
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div style={s.infoRow}>
+                <span style={s.infoLabel}>Operating Companies</span>
+                <span style={{ ...s.infoValue, display: 'flex', alignItems: 'center', gap: 8, flex: 1 }}>
+                  <span>{engagement.operating_companies.map(o => o.name).join(', ') || '—'}</span>
+                  <button
+                    onClick={() => { setOcDraft(engagement.operating_companies.map(o => o.id)); setOcEdit(true) }}
+                    style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '1px 7px', fontSize: 'var(--text-xs)', cursor: 'pointer', color: 'var(--text-muted)', flexShrink: 0 }}
+                  >
+                    Edit
+                  </button>
+                </span>
+              </div>
+            )}
             <InfoRow label="AI Application" value={engagement.is_ai_application ? 'Yes' : 'No'} />
             <InfoRow label="Vendor Emails" value={engagement.vendor_emails.join(', ') || '—'} />
             <InfoRow label="IR Emails" value={engagement.ir_emails.join(', ') || '—'} />
-            <InfoRow label="Vendor Token" value={<span style={s.mono}>{engagement.vendor_token}</span>} />
-            <InfoRow label="IR Token" value={<span style={s.mono}>{engagement.ir_token}</span>} />
+            <TokenRow label="Vendor Token" token={engagement.vendor_token} urlPath="/respond" />
+            <TokenRow label="IR Token" token={engagement.ir_token} urlPath="/evaluation" />
             <InfoRow label="Created" value={formatDate(engagement.created_at)} />
             <InfoRow label="Submitted" value={formatDate(engagement.submitted_at)} />
           </div>
@@ -232,6 +288,61 @@ function InfoRow({ label, value }) {
     <div style={s.infoRow}>
       <span style={s.infoLabel}>{label}</span>
       <span style={s.infoValue}>{value}</span>
+    </div>
+  )
+}
+
+function TokenRow({ label, token, urlPath }) {
+  const [copied, setCopied] = useState(false)
+
+  function copy() {
+    const base = (localStorage.getItem('isdd_portal_base_url') || window.location.origin).replace(/\/$/, '')
+    const url = `${base}${BASE_PATH}${urlPath}/${token}`
+
+    function markCopied() {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    }
+
+    function fallback() {
+      const el = document.createElement('textarea')
+      el.value = url
+      el.style.cssText = 'position:fixed;opacity:0;pointer-events:none'
+      document.body.appendChild(el)
+      el.select()
+      try { document.execCommand('copy'); markCopied() } catch {}
+      document.body.removeChild(el)
+    }
+
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(url).then(markCopied).catch(fallback)
+    } else {
+      fallback()
+    }
+  }
+
+  return (
+    <div style={s.infoRow}>
+      <span style={s.infoLabel}>{label}</span>
+      <span style={{ ...s.infoValue, display: 'flex', alignItems: 'center', gap: 8, flex: 1 }}>
+        <span style={s.mono}>{token}</span>
+        <button
+          onClick={copy}
+          style={{
+            background: 'none',
+            border: `1px solid ${copied ? 'var(--status-closed)' : 'var(--border)'}`,
+            borderRadius: 'var(--radius-sm)',
+            padding: '1px 8px',
+            fontSize: 'var(--text-xs)',
+            cursor: 'pointer',
+            color: copied ? 'var(--status-closed)' : 'var(--text-muted)',
+            transition: 'color 150ms ease, border-color 150ms ease',
+            flexShrink: 0,
+          }}
+        >
+          {copied ? '✓ Copied' : 'Copy Link'}
+        </button>
+      </span>
     </div>
   )
 }
@@ -661,12 +772,131 @@ function AuditTab({ engagementId, apiFetch }) {
   )
 }
 
+// ── Files tab ─────────────────────────────────────────────────────────────────
+
+const FILE_TYPE_LABELS = {
+  IR_FUNCTIONAL_EVALUATION: 'Functional Evaluation',
+  IR_NDA: 'NDA',
+  IR_SOW: 'Statement of Work',
+  VENDOR_ATTACHMENT: 'Vendor Attachment',
+}
+
+const IR_TYPES = ['IR_FUNCTIONAL_EVALUATION', 'IR_NDA', 'IR_SOW']
+
+function formatBytes(n) {
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function FilesTab({ engagementId, apiFetch, adminToken }) {
+  const [files, setFiles] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [downloading, setDownloading] = useState(null)
+
+  useEffect(() => {
+    apiFetch(`/api/admin/engagements/${engagementId}/files`)
+      .then(r => r.ok ? r.json() : [])
+      .then(data => { setFiles(data); setLoading(false) })
+  }, [apiFetch, engagementId])
+
+  async function download(file) {
+    setDownloading(file.id)
+    const res = await apiFetch(`/api/admin/engagements/${engagementId}/files/${file.id}`)
+    if (res.ok) {
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = file.original_filename
+      a.click()
+      URL.revokeObjectURL(url)
+    }
+    setDownloading(null)
+  }
+
+  if (loading) return <div style={{ padding: 24, color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>Loading…</div>
+
+  const irFiles = files.filter(f => IR_TYPES.includes(f.file_type))
+  const vendorFiles = files.filter(f => f.file_type === 'VENDOR_ATTACHMENT')
+
+  function FileTable({ items, emptyMsg }) {
+    if (items.length === 0) return (
+      <div style={{ padding: '20px 0', textAlign: 'center', fontSize: 'var(--text-sm)', color: 'var(--text-muted)' }}>{emptyMsg}</div>
+    )
+    return (
+      <table style={s.table}>
+        <thead>
+          <tr style={{ background: 'var(--bg-subtle)' }}>
+            <th style={s.th}>Type</th>
+            <th style={s.th}>Filename</th>
+            <th style={s.th}>Size</th>
+            <th style={s.th}>Uploaded By</th>
+            <th style={s.th}>Date</th>
+            <th style={s.th}></th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((f, idx) => (
+            <tr key={f.id} style={{ background: idx % 2 === 0 ? 'var(--bg-surface)' : 'var(--bg-subtle)' }}>
+              <td style={s.td}>
+                <span style={{ fontSize: 'var(--text-xs)', padding: '2px 7px', borderRadius: 100, background: 'var(--bg-muted)', color: 'var(--text-secondary)', fontWeight: 500 }}>
+                  {FILE_TYPE_LABELS[f.file_type] || f.file_type}
+                </span>
+              </td>
+              <td style={{ ...s.td, ...s.mono, maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.original_filename}</td>
+              <td style={{ ...s.td, color: 'var(--text-secondary)' }}>{formatBytes(f.file_size_bytes)}</td>
+              <td style={{ ...s.td, color: 'var(--text-secondary)' }}>{f.uploaded_by}</td>
+              <td style={{ ...s.td, color: 'var(--text-secondary)' }}>{formatDate(f.uploaded_at)}</td>
+              <td style={{ ...s.td, textAlign: 'right' }}>
+                <button
+                  className="btn btn-secondary"
+                  style={{ height: 26, padding: '0 10px', fontSize: 'var(--text-xs)' }}
+                  onClick={() => download(f)}
+                  disabled={downloading === f.id}
+                >
+                  {downloading === f.id ? '…' : 'Download'}
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    )
+  }
+
+  return (
+    <div style={s.tabContent}>
+      <div className="card" style={{ ...s.panel, marginBottom: 16 }}>
+        <div style={s.panelHeader}>
+          <h3 style={s.panelTitle}>IR Documents</h3>
+          <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>{irFiles.length} file{irFiles.length !== 1 ? 's' : ''}</span>
+        </div>
+        <div style={{ overflow: 'hidden' }}>
+          <FileTable items={irFiles} emptyMsg="No IR documents uploaded yet." />
+        </div>
+      </div>
+
+      <div className="card" style={{ ...s.panel, marginBottom: 0 }}>
+        <div style={s.panelHeader}>
+          <h3 style={s.panelTitle}>Vendor Attachments</h3>
+          <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>{vendorFiles.length} file{vendorFiles.length !== 1 ? 's' : ''}</span>
+        </div>
+        <div style={{ overflow: 'hidden' }}>
+          <FileTable items={vendorFiles} emptyMsg="No vendor attachments uploaded yet." />
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 const TABS = [
   { key: 'overview', label: 'Overview' },
   { key: 'risk', label: 'Risk Assessment' },
   { key: 'responses', label: 'Responses' },
+  { key: 'files', label: 'Files' },
   { key: 'audit', label: 'Audit Log' },
 ]
 
@@ -707,6 +937,7 @@ export default function EngagementDetail() {
     setActionError('')
     let res
     if (type === 'advance') res = await apiFetch(`/api/admin/engagements/${id}/advance`, { method: 'POST', body: '{}' })
+    else if (type === 'dispatch') res = await apiFetch(`/api/admin/engagements/${id}/dispatch`, { method: 'POST', body: '{}' })
     else if (type === 'reopen-dd') res = await apiFetch(`/api/admin/engagements/${id}/reopen`, { method: 'POST', body: '{}' })
     else if (type === 'under-review') res = await apiFetch(`/api/admin/engagements/${id}/set-status`, { method: 'POST', body: JSON.stringify({ status: 'UNDER_REVIEW' }) })
     else if (type === 'close') res = await apiFetch(`/api/admin/engagements/${id}/set-status`, { method: 'POST', body: JSON.stringify({ status: 'CLOSED' }) })
@@ -749,6 +980,9 @@ export default function EngagementDetail() {
             {st === 'DRAFT' && (
               <button className="btn btn-primary" onClick={() => doAction('advance')}>Advance to IR Stage</button>
             )}
+            {st === 'PENDING_DISPATCH' && (
+              <button className="btn btn-primary" onClick={() => doAction('dispatch')}>Dispatch to Vendor</button>
+            )}
             {st === 'RISK_ASSESSMENT_PENDING' && (
               <button className="btn btn-secondary" onClick={() => doAction('reopen-dd')}>Reopen Questionnaire</button>
             )}
@@ -772,10 +1006,7 @@ export default function EngagementDetail() {
           {TABS.map(tab => (
             <button
               key={tab.key}
-              style={{
-                ...s.tabBtn,
-                ...(activeTab === tab.key ? s.tabBtnActive : {}),
-              }}
+              className={activeTab === tab.key ? 'tab-btn tab-btn--active' : 'tab-btn'}
               onClick={() => setActiveTab(tab.key)}
             >
               {tab.label}
@@ -787,6 +1018,7 @@ export default function EngagementDetail() {
         {activeTab === 'overview' && <OverviewTab engagement={engagement} apiFetch={apiFetch} onRefresh={loadEngagement} />}
         {activeTab === 'risk' && <RiskTab engagementId={id} apiFetch={apiFetch} />}
         {activeTab === 'responses' && <ResponsesTab engagementId={id} apiFetch={apiFetch} />}
+        {activeTab === 'files' && <FilesTab engagementId={id} apiFetch={apiFetch} />}
         {activeTab === 'audit' && <AuditTab engagementId={id} apiFetch={apiFetch} />}
       </div>
     </AdminLayout>

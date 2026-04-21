@@ -7,6 +7,7 @@ import { BASE_PATH } from '../../config'
 const STATUS_LABELS = {
   DRAFT: 'Draft',
   FUNCTIONAL_EVALUATION_PENDING: 'IR Docs Pending',
+  PENDING_DISPATCH: 'Pending Dispatch',
   DD_SENT_UNOPENED: 'DD Sent',
   DD_IN_PROGRESS: 'DD In Progress',
   RISK_ASSESSMENT_PENDING: 'Risk Pending',
@@ -18,6 +19,7 @@ const STATUS_LABELS = {
 const STATUS_COLORS = {
   DRAFT: 'var(--status-draft)',
   FUNCTIONAL_EVALUATION_PENDING: 'var(--status-ir-pending)',
+  PENDING_DISPATCH: 'var(--status-pending-dispatch)',
   DD_SENT_UNOPENED: 'var(--status-dd-sent)',
   DD_IN_PROGRESS: 'var(--status-dd-progress)',
   RISK_ASSESSMENT_PENDING: 'var(--status-risk-pending)',

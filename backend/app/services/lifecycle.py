@@ -7,6 +7,9 @@ VALID_TRANSITIONS: dict[EngagementStatus, list[EngagementStatus]] = {
         EngagementStatus.FUNCTIONAL_EVALUATION_PENDING,
     ],
     EngagementStatus.FUNCTIONAL_EVALUATION_PENDING: [
+        EngagementStatus.PENDING_DISPATCH,
+    ],
+    EngagementStatus.PENDING_DISPATCH: [
         EngagementStatus.DD_SENT_UNOPENED,
     ],
     EngagementStatus.DD_SENT_UNOPENED: [

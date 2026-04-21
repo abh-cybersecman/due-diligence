@@ -22,6 +22,7 @@ from app.schemas.engagement import (
     EngagementListResponse,
     EngagementResponse,
     EngagementUpdate,
+    IRDocumentOut,
     ResponseDetail,
     SetStatusRequest,
 )
@@ -275,6 +276,34 @@ async def advance_engagement(
     return EngagementResponse.model_validate(await _fetch_engagement(db, engagement_id))
 
 
+@router.post("/engagements/{engagement_id}/dispatch", response_model=EngagementResponse)
+async def dispatch_engagement(
+    engagement_id: uuid.UUID,
+    admin: str = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+) -> EngagementResponse:
+    """Dispatch vendor questionnaire: PENDING_DISPATCH → DD_SENT_UNOPENED."""
+    engagement = await _get_engagement_or_404(db, engagement_id)
+    validate_transition(engagement.status, EngagementStatus.DD_SENT_UNOPENED)
+
+    old_status = engagement.status
+    engagement.status = EngagementStatus.DD_SENT_UNOPENED
+    engagement.updated_at = datetime.now(timezone.utc)
+
+    await log_action(
+        db,
+        actor=admin,
+        actor_type=ActorType.ADMIN,
+        action="engagement.dispatched",
+        description=f"Engagement {engagement.doc_number} dispatched to vendor: {old_status.value} → DD_SENT_UNOPENED",
+        engagement_id=engagement_id,
+        metadata={"from": old_status.value, "to": EngagementStatus.DD_SENT_UNOPENED.value},
+    )
+
+    await db.flush()
+    return EngagementResponse.model_validate(await _fetch_engagement(db, engagement_id))
+
+
 @router.post("/engagements/{engagement_id}/reopen", response_model=EngagementResponse)
 async def reopen_engagement(
     engagement_id: uuid.UUID,
@@ -386,8 +415,23 @@ async def get_responses(
 
 
 # ---------------------------------------------------------------------------
-# Authenticated file download
+# File list + authenticated download
 # ---------------------------------------------------------------------------
+
+@router.get("/engagements/{engagement_id}/files", response_model=list[IRDocumentOut])
+async def list_files(
+    engagement_id: uuid.UUID,
+    admin: str = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[IRDocumentOut]:
+    await _get_engagement_or_404(db, engagement_id)
+    result = await db.execute(
+        select(FileUpload)
+        .where(FileUpload.engagement_id == engagement_id)
+        .order_by(FileUpload.uploaded_at.asc())
+    )
+    return [IRDocumentOut.model_validate(f) for f in result.scalars().all()]
+
 
 @router.get("/engagements/{engagement_id}/files/{file_id}")
 async def download_file(
