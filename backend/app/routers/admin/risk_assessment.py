@@ -178,7 +178,7 @@ async def finalise_risk_assessment(
         has_sow = any(f.file_type == FileType.IR_SOW for f in engagement.files)
         new_status = (
             EngagementStatus.CLOSED if (has_nda and has_sow)
-            else EngagementStatus.CLOSED_PENDING_IR_DOCS
+            else EngagementStatus.PENDING_CLOSURE
         )
         old_status = engagement.status
         engagement.status = new_status

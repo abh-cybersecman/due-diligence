@@ -103,6 +103,9 @@ async def upload_file(
 ):
     engagement = await _get_engagement_for_ir(token, ir_user, db)
 
+    if engagement.status == EngagementStatus.CLOSED:
+        raise HTTPException(403, "Document uploads are locked. Contact the Information Security Team to reopen the engagement.")
+
     if file_type not in _IR_FILE_TYPES:
         raise HTTPException(400, "file_type must be IR_FUNCTIONAL_EVALUATION, IR_NDA, or IR_SOW")
 
@@ -149,33 +152,6 @@ async def upload_file(
     await db.flush()
     await db.refresh(record)
 
-    # Auto-resolve CLOSED_PENDING_IR_DOCS → CLOSED when NDA + SOW are both present
-    if engagement.status == EngagementStatus.CLOSED_PENDING_IR_DOCS:
-        from sqlalchemy import select as _select
-        docs_result = await db.execute(
-            _select(FileUpload).where(
-                FileUpload.engagement_id == engagement.id,
-                FileUpload.file_type.in_([FileType.IR_NDA, FileType.IR_SOW]),
-            )
-        )
-        ir_docs = docs_result.scalars().all()
-        has_nda = any(f.file_type == FileType.IR_NDA for f in ir_docs)
-        has_sow = any(f.file_type == FileType.IR_SOW for f in ir_docs)
-        if has_nda and has_sow:
-            engagement.status = EngagementStatus.CLOSED
-            await log_action(
-                db,
-                actor="system",
-                actor_type=ActorType.IR,
-                action="engagement.status.advanced",
-                description=f"Engagement {engagement.doc_number} automatically closed after all required IR documents uploaded",
-                engagement_id=engagement.id,
-                metadata={
-                    "from": EngagementStatus.CLOSED_PENDING_IR_DOCS.value,
-                    "to": EngagementStatus.CLOSED.value,
-                },
-            )
-
     return IRDocumentOut.model_validate(record)
 
 
@@ -187,6 +163,9 @@ async def delete_file(
     db: AsyncSession = Depends(get_db),
 ):
     engagement = await _get_engagement_for_ir(token, ir_user, db)
+
+    if engagement.status == EngagementStatus.CLOSED:
+        raise HTTPException(403, "Document uploads are locked. Contact the Information Security Team to reopen the engagement.")
 
     result = await db.execute(
         select(FileUpload).where(
@@ -202,8 +181,7 @@ async def delete_file(
     _locked_statuses = {
         EngagementStatus.DD_IN_PROGRESS,
         EngagementStatus.RISK_ASSESSMENT_PENDING,
-        EngagementStatus.CLOSED,
-        EngagementStatus.CLOSED_PENDING_IR_DOCS,
+        EngagementStatus.PENDING_CLOSURE,
         EngagementStatus.UNDER_REVIEW,
     }
     if record.file_type == FileType.IR_FUNCTIONAL_EVALUATION and engagement.status in _locked_statuses:

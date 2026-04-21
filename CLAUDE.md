@@ -442,7 +442,7 @@ PENDING_DISPATCH
 DD_IN_PROGRESS
 RISK_ASSESSMENT_PENDING
 CLOSED
-CLOSED_PENDING_IR_DOCS
+PENDING_CLOSURE
 UNDER_REVIEW
 ```
 
@@ -660,23 +660,23 @@ DD_IN_PROGRESS
 
 RISK_ASSESSMENT_PENDING
   → CLOSED                            (admin finalises risk assessment AND NDA + SOW present)
-  → CLOSED_PENDING_IR_DOCS            (admin finalises risk assessment AND NDA or SOW missing)
+  → PENDING_CLOSURE                   (admin finalises risk assessment AND NDA or SOW missing)
 
-CLOSED_PENDING_IR_DOCS
-  → CLOSED                            (automatic: when missing IR documents are uploaded)
+PENDING_CLOSURE
+  → CLOSED                            (admin manually clicks "Close Engagement")
   → UNDER_REVIEW                      (admin manually triggers)
 
 CLOSED
   → UNDER_REVIEW                      (admin manually triggers)
 
 UNDER_REVIEW
-  → CLOSED or CLOSED_PENDING_IR_DOCS  (admin manually closes again — check IR doc status)
+  → CLOSED or PENDING_CLOSURE         (admin manually closes again — check IR doc status)
 ```
 
 Vendor form is editable (autosave, file upload/delete) in: `DD_IN_PROGRESS`, `UNDER_REVIEW`.
 Vendor form submit button is only available in: `DD_IN_PROGRESS`.
 Vendor form is read-only in all other statuses.
-IR can upload documents in any status.
+IR can upload and delete documents in any status EXCEPT `CLOSED` — once closed, all IR document changes are locked.
 Admin can edit structured fields, risk assessment, and internal notes in any status.
 
 ---

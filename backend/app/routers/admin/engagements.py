@@ -347,7 +347,7 @@ async def set_status(
     validate_transition(engagement.status, body.status)
 
     # Closing requires a finalised risk assessment
-    if body.status in (EngagementStatus.CLOSED, EngagementStatus.CLOSED_PENDING_IR_DOCS):
+    if body.status in (EngagementStatus.CLOSED, EngagementStatus.PENDING_CLOSURE):
         ra_result = await db.execute(
             select(RiskAssessment).where(RiskAssessment.engagement_id == engagement_id)
         )
@@ -389,7 +389,7 @@ async def close_engagement(
     admin: str = Depends(get_admin_user),
     db: AsyncSession = Depends(get_db),
 ) -> EngagementResponse:
-    """Close from UNDER_REVIEW: routes to CLOSED if NDA+SOW present, else CLOSED_PENDING_IR_DOCS."""
+    """Close from UNDER_REVIEW: routes to CLOSED if NDA+SOW present, else PENDING_CLOSURE."""
     engagement = await _get_engagement_or_404(db, engagement_id)
 
     if engagement.status != EngagementStatus.UNDER_REVIEW:
@@ -407,7 +407,7 @@ async def close_engagement(
     ir_docs = docs_result.scalars().all()
     has_nda = any(f.file_type == FileType.IR_NDA for f in ir_docs)
     has_sow = any(f.file_type == FileType.IR_SOW for f in ir_docs)
-    target = EngagementStatus.CLOSED if (has_nda and has_sow) else EngagementStatus.CLOSED_PENDING_IR_DOCS
+    target = EngagementStatus.CLOSED if (has_nda and has_sow) else EngagementStatus.PENDING_CLOSURE
 
     old_status = engagement.status
     engagement.status = target
@@ -421,6 +421,49 @@ async def close_engagement(
         description=f"Engagement {engagement.doc_number} closed: {old_status.value} → {target.value}",
         engagement_id=engagement_id,
         metadata={"from": old_status.value, "to": target.value, "has_nda": has_nda, "has_sow": has_sow},
+    )
+
+    await db.flush()
+    return EngagementResponse.model_validate(await _fetch_engagement(db, engagement_id))
+
+
+@router.post("/engagements/{engagement_id}/close-from-pending", response_model=EngagementResponse)
+async def close_from_pending(
+    engagement_id: uuid.UUID,
+    admin: str = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+) -> EngagementResponse:
+    """Manually close from PENDING_CLOSURE. Requires finalised risk assessment."""
+    engagement = await _get_engagement_or_404(db, engagement_id)
+
+    if engagement.status != EngagementStatus.PENDING_CLOSURE:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Can only close from PENDING_CLOSURE (current: {engagement.status.value})",
+        )
+
+    ra_result = await db.execute(
+        select(RiskAssessment).where(RiskAssessment.engagement_id == engagement_id)
+    )
+    ra = ra_result.scalar_one_or_none()
+    if ra is None or ra.status != RiskAssessmentStatus.FINALISED:
+        raise HTTPException(
+            status_code=400,
+            detail="A finalised risk assessment is required before closing the engagement",
+        )
+
+    old_status = engagement.status
+    engagement.status = EngagementStatus.CLOSED
+    engagement.updated_at = datetime.now(timezone.utc)
+
+    await log_action(
+        db,
+        actor=admin,
+        actor_type=ActorType.ADMIN,
+        action="engagement.status.changed",
+        description=f"Engagement {engagement.doc_number} manually closed: {old_status.value} → CLOSED",
+        engagement_id=engagement_id,
+        metadata={"from": old_status.value, "to": EngagementStatus.CLOSED.value},
     )
 
     await db.flush()

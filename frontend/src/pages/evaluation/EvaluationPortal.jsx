@@ -37,7 +37,7 @@ const STATUS_LABELS = {
   DD_IN_PROGRESS: 'Questionnaire In Progress',
   RISK_ASSESSMENT_PENDING: 'Risk Assessment Pending',
   CLOSED: 'Closed',
-  CLOSED_PENDING_IR_DOCS: 'Closed — Pending Documents',
+  PENDING_CLOSURE: 'Pending Closure',
   UNDER_REVIEW: 'Under Review',
 }
 
@@ -48,7 +48,7 @@ const STATUS_COLORS = {
   DD_IN_PROGRESS: 'var(--status-dd-progress)',
   RISK_ASSESSMENT_PENDING: 'var(--status-risk-pending)',
   CLOSED: 'var(--status-closed)',
-  CLOSED_PENDING_IR_DOCS: 'var(--status-closed-pending)',
+  PENDING_CLOSURE: 'var(--status-closed-pending)',
   UNDER_REVIEW: 'var(--status-under-review)',
 }
 
@@ -57,7 +57,7 @@ const DD_ACTIVE_STATUSES = new Set([
   'DD_IN_PROGRESS',
   'RISK_ASSESSMENT_PENDING',
   'CLOSED',
-  'CLOSED_PENDING_IR_DOCS',
+  'PENDING_CLOSURE',
   'UNDER_REVIEW',
 ])
 
@@ -125,7 +125,7 @@ const themeToggleStyle = {
 
 // ─── UploadZone ──────────────────────────────────────────────────────────────
 
-function UploadZone({ docType, files, onUpload, onDelete, uploading }) {
+function UploadZone({ docType, files, onUpload, onDelete, uploading, locked }) {
   const [dragOver, setDragOver] = useState(false)
   const inputRef = useRef(null)
 
@@ -135,6 +135,7 @@ function UploadZone({ docType, files, onUpload, onDelete, uploading }) {
   function handleDrop(e) {
     e.preventDefault()
     setDragOver(false)
+    if (locked) return
     const droppedFiles = Array.from(e.dataTransfer.files)
     if (droppedFiles.length > 0) onUpload(docType.key, droppedFiles[0])
   }
@@ -155,42 +156,48 @@ function UploadZone({ docType, files, onUpload, onDelete, uploading }) {
           </span>
           <span style={uploadZoneStyles.hint}>{docType.hint}</span>
         </div>
-        <button
-          className="btn btn-secondary"
-          style={{ fontSize: 'var(--text-xs)', height: 28, padding: '0 10px' }}
-          onClick={() => inputRef.current?.click()}
-          disabled={uploading}
-        >
-          Upload
-        </button>
-        <input
-          ref={inputRef}
-          type="file"
-          style={{ display: 'none' }}
-          onChange={handleInputChange}
-          accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.png,.jpg,.jpeg"
-        />
-      </div>
-
-      <div
-        style={{
-          ...uploadZoneStyles.dropZone,
-          borderColor: dragOver ? 'var(--accent)' : 'var(--border)',
-          background: dragOver ? 'var(--accent-subtle)' : 'var(--bg-subtle)',
-        }}
-        onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
-        onDragLeave={() => setDragOver(false)}
-        onDrop={handleDrop}
-        onClick={() => inputRef.current?.click()}
-      >
-        {uploading === docType.key ? (
-          <span style={uploadZoneStyles.dropText}>Uploading…</span>
-        ) : (
-          <span style={uploadZoneStyles.dropText}>
-            Drop file here or <span style={{ color: 'var(--accent)', fontWeight: 500 }}>browse</span>
-          </span>
+        {!locked && (
+          <>
+            <button
+              className="btn btn-secondary"
+              style={{ fontSize: 'var(--text-xs)', height: 28, padding: '0 10px' }}
+              onClick={() => inputRef.current?.click()}
+              disabled={uploading}
+            >
+              Upload
+            </button>
+            <input
+              ref={inputRef}
+              type="file"
+              style={{ display: 'none' }}
+              onChange={handleInputChange}
+              accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.png,.jpg,.jpeg"
+            />
+          </>
         )}
       </div>
+
+      {!locked && (
+        <div
+          style={{
+            ...uploadZoneStyles.dropZone,
+            borderColor: dragOver ? 'var(--accent)' : 'var(--border)',
+            background: dragOver ? 'var(--accent-subtle)' : 'var(--bg-subtle)',
+          }}
+          onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={handleDrop}
+          onClick={() => inputRef.current?.click()}
+        >
+          {uploading === docType.key ? (
+            <span style={uploadZoneStyles.dropText}>Uploading…</span>
+          ) : (
+            <span style={uploadZoneStyles.dropText}>
+              Drop file here or <span style={{ color: 'var(--accent)', fontWeight: 500 }}>browse</span>
+            </span>
+          )}
+        </div>
+      )}
 
       {matching.length > 0 && (
         <div style={uploadZoneStyles.fileList}>
@@ -199,13 +206,15 @@ function UploadZone({ docType, files, onUpload, onDelete, uploading }) {
               <span style={uploadZoneStyles.fileIcon}>📄</span>
               <span style={uploadZoneStyles.fileName}>{f.original_filename}</span>
               <span style={uploadZoneStyles.fileSize}>{formatBytes(f.file_size_bytes)}</span>
-              <button
-                style={uploadZoneStyles.deleteBtn}
-                onClick={() => onDelete(f.id)}
-                title="Remove file"
-              >
-                ×
-              </button>
+              {!locked && (
+                <button
+                  style={uploadZoneStyles.deleteBtn}
+                  onClick={() => onDelete(f.id)}
+                  title="Remove file"
+                >
+                  ×
+                </button>
+              )}
             </div>
           ))}
           <span style={uploadZoneStyles.totals}>
@@ -549,6 +558,7 @@ function PortalContent({ token, session, onLogout }) {
   const statusLabel = STATUS_LABELS[engagement?.status] || engagement?.status
   const statusColor = STATUS_COLORS[engagement?.status] || 'var(--text-muted)'
   const showResponsesTab = DD_ACTIVE_STATUSES.has(engagement?.status)
+  const isLocked = engagement?.status === 'CLOSED'
 
   return (
     <div style={portalStyles.page}>
@@ -648,6 +658,12 @@ function PortalContent({ token, session, onLogout }) {
                 )}
               </div>
 
+              {isLocked && (
+                <div style={portalStyles.lockedNotice}>
+                  Documents are locked. Contact the Information Security Team to reopen.
+                </div>
+              )}
+
               {uploadError && (
                 <div style={portalStyles.uploadError}>{uploadError}</div>
               )}
@@ -662,6 +678,7 @@ function PortalContent({ token, session, onLogout }) {
                       onUpload={handleUpload}
                       onDelete={handleDelete}
                       uploading={uploading}
+                      locked={isLocked}
                     />
                   </React.Fragment>
                 ))}
@@ -754,6 +771,15 @@ const portalStyles = {
     color: 'var(--text-primary)',
   },
   savedMsg: { fontSize: 'var(--text-xs)', color: 'var(--risk-low)', animation: 'fadeIn 150ms ease' },
+  lockedNotice: {
+    margin: '12px 24px 0',
+    padding: '8px 12px',
+    background: 'var(--bg-subtle)',
+    border: '1px solid var(--border-strong)',
+    borderRadius: 'var(--radius-sm)',
+    fontSize: 'var(--text-sm)',
+    color: 'var(--text-secondary)',
+  },
   uploadError: {
     margin: '12px 24px 0',
     padding: '8px 12px',

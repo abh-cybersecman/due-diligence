@@ -30,7 +30,7 @@ const STATUS_LABELS = {
   DD_IN_PROGRESS: 'DD In Progress',
   RISK_ASSESSMENT_PENDING: 'Risk Pending',
   CLOSED: 'Closed',
-  CLOSED_PENDING_IR_DOCS: 'Closed — Pending Docs',
+  PENDING_CLOSURE: 'Pending Closure',
   UNDER_REVIEW: 'Under Review',
 }
 const STATUS_COLORS = {
@@ -40,7 +40,7 @@ const STATUS_COLORS = {
   DD_IN_PROGRESS: 'var(--status-dd-progress)',
   RISK_ASSESSMENT_PENDING: 'var(--status-risk-pending)',
   CLOSED: 'var(--status-closed)',
-  CLOSED_PENDING_IR_DOCS: 'var(--status-closed-pending)',
+  PENDING_CLOSURE: 'var(--status-closed-pending)',
   UNDER_REVIEW: 'var(--status-under-review)',
 }
 const RISK_LABELS = { CRITICAL: 'Critical', HIGH: 'High', MEDIUM: 'Medium', LOW: 'Low' }
@@ -1090,7 +1090,7 @@ export default function EngagementDetail() {
     else if (type === 'reopen-dd') res = await apiFetch(`/api/admin/engagements/${id}/reopen`, { method: 'POST', body: '{}' })
     else if (type === 'under-review') res = await apiFetch(`/api/admin/engagements/${id}/set-status`, { method: 'POST', body: JSON.stringify({ status: 'UNDER_REVIEW' }) })
     else if (type === 'close') res = await apiFetch(`/api/admin/engagements/${id}/set-status`, { method: 'POST', body: JSON.stringify({ status: 'CLOSED' }) })
-    else if (type === 'close-pending') res = await apiFetch(`/api/admin/engagements/${id}/set-status`, { method: 'POST', body: JSON.stringify({ status: 'CLOSED_PENDING_IR_DOCS' }) })
+    else if (type === 'close-from-pending') res = await apiFetch(`/api/admin/engagements/${id}/close-from-pending`, { method: 'POST', body: '{}' })
     else if (type === 'smart-close') res = await apiFetch(`/api/admin/engagements/${id}/close`, { method: 'POST', body: '{}' })
 
     if (res && !res.ok) {
@@ -1136,8 +1136,11 @@ export default function EngagementDetail() {
             {st === 'RISK_ASSESSMENT_PENDING' && (
               <button className="btn btn-secondary" onClick={() => doAction('reopen-dd')}>Reopen Questionnaire</button>
             )}
-            {(st === 'CLOSED' || st === 'CLOSED_PENDING_IR_DOCS') && (
+            {(st === 'CLOSED' || st === 'PENDING_CLOSURE') && (
               <button className="btn btn-secondary" onClick={() => doAction('under-review')}>Move to Under Review</button>
+            )}
+            {st === 'PENDING_CLOSURE' && (
+              <button className="btn btn-primary" onClick={() => doAction('close-from-pending')}>Close Engagement</button>
             )}
             {st === 'UNDER_REVIEW' && (
               <button className="btn btn-primary" onClick={() => doAction('smart-close')}>Close Engagement</button>

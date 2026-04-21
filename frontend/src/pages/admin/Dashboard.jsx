@@ -11,7 +11,7 @@ const STATUS_LABELS = {
   DD_IN_PROGRESS: 'DD In Progress',
   RISK_ASSESSMENT_PENDING: 'Risk Pending',
   CLOSED: 'Closed',
-  CLOSED_PENDING_IR_DOCS: 'Closed — Pending Docs',
+  PENDING_CLOSURE: 'Pending Closure',
   UNDER_REVIEW: 'Under Review',
 }
 
@@ -22,7 +22,7 @@ const STATUS_COLORS = {
   DD_IN_PROGRESS: 'var(--status-dd-progress)',
   RISK_ASSESSMENT_PENDING: 'var(--status-risk-pending)',
   CLOSED: 'var(--status-closed)',
-  CLOSED_PENDING_IR_DOCS: 'var(--status-closed-pending)',
+  PENDING_CLOSURE: 'var(--status-closed-pending)',
   UNDER_REVIEW: 'var(--status-under-review)',
 }
 

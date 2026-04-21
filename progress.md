@@ -71,10 +71,9 @@
   - `POST /api/admin/engagements/{id}/risk-assessment` — creates DRAFT; 409 if already exists
   - `GET /api/admin/engagements/{id}/risk-assessment` — returns full assessment including `risk_items`
   - `PATCH /api/admin/engagements/{id}/risk-assessment` — updates `overall_rating`, `summary`, and/or `risk_items`; risk items replaced atomically (delete-all then re-insert); all post-write returns use `execution_options(populate_existing=True)` to bypass SQLAlchemy identity map cache
-  - `POST /api/admin/engagements/{id}/risk-assessment/finalise` — sets FINALISED; if engagement is `RISK_ASSESSMENT_PENDING` auto-advances to `CLOSED` (NDA + SOW both present) or `CLOSED_PENDING_IR_DOCS` (either missing); status change audit-logged by "system" actor
+  - `POST /api/admin/engagements/{id}/risk-assessment/finalise` — sets FINALISED; if engagement is `RISK_ASSESSMENT_PENDING` auto-advances to `CLOSED` (NDA + SOW both present) or `PENDING_CLOSURE` (either missing); status change audit-logged by "system" actor
   - `POST /api/admin/engagements/{id}/risk-assessment/reopen` — returns to DRAFT
-- **Lifecycle enforcement for set-status** — `POST /{id}/set-status` to `CLOSED` or `CLOSED_PENDING_IR_DOCS` now requires a finalised risk assessment; returns 400 with explanatory message if not present
-- **CLOSED_PENDING_IR_DOCS auto-resolution** — IR upload handler (`routers/evaluation/engagements.py`) checks after every file write: if engagement is `CLOSED_PENDING_IR_DOCS` and both `IR_NDA` + `IR_SOW` are now present, auto-advances to `CLOSED` with system audit log entry
+- **Lifecycle enforcement for set-status** — `POST /{id}/set-status` to `CLOSED` or `PENDING_CLOSURE` now requires a finalised risk assessment; returns 400 with explanatory message if not present
 - **Word export** — `services/export.py` using `python-docx`; entry point `generate_export(engagement_id, db) -> bytes`; five sections:
   1. Cover page — application name, OC names joined, document number, export date
   2. Document Control — version table (v1.0 pre-filled)
@@ -97,7 +96,7 @@
   - *Risk Assessment* — create button if no RA; form with overall rating select and summary textarea; risk items list with `RiskItemRow` (description, rating select, assignee multi-select chip dropdown with outside-click close, mitigation textarea); add/remove items; Save Draft, Finalise, Reopen buttons; disabled "Generate with AI" `AIButton`
   - *Responses* — read-only question/answer list grouped by section; file download links for FILE_UPLOAD responses
   - *Audit Log* — paginated table (actor, type, action, description, timestamp)
-  - Lifecycle action buttons conditional on current status: Advance to IR Stage (DRAFT), Dispatch to Vendor (PENDING_DISPATCH), Reopen Questionnaire (RISK_ASSESSMENT_PENDING), Move to Under Review (CLOSED / CLOSED_PENDING_IR_DOCS), Close / Close Pending (UNDER_REVIEW)
+  - Lifecycle action buttons conditional on current status: Advance to IR Stage (DRAFT), Dispatch to Vendor (PENDING_DISPATCH), Reopen Questionnaire (RISK_ASSESSMENT_PENDING), Move to Under Review (CLOSED / PENDING_CLOSURE), Close Engagement (PENDING_CLOSURE and UNDER_REVIEW)
   - Export button fetches `.docx` blob and triggers browser download
 - **Settings** (`pages/admin/Settings.jsx`) — Operating Companies CRUD (add, inline edit, delete); Assignees CRUD (name + type label); generic error display; all mutations refresh the list
 - **App.jsx** — added `ProtectedAdmin` wrapper; registered `/admin/login`, `/admin/dashboard`, `/admin/engagements/new`, `/admin/engagements/:id`, `/admin/settings`
@@ -123,11 +122,19 @@
 
 - **`UNDER_REVIEW` now editable for vendor** — `EDITABLE_STATUSES` on both backend and frontend expanded to include `UNDER_REVIEW`. Vendor can autosave responses and upload/delete files while the engagement is under review (intended for cases where a response changes months after initial closure). The Submit button is controlled separately via `SUBMIT_STATUSES = {DD_IN_PROGRESS}` — submit is not available in `UNDER_REVIEW` since the vendor's changes are visible to admin in real-time via the IR portal responses tab.
 - **Info banner in vendor questionnaire** — `UNDER_REVIEW` status shows a blue informational notice: "This engagement is under review. You may update your responses — changes are saved automatically."
-- **Smart close endpoint** — `POST /api/admin/engagements/{id}/close` replaces the two manual "Close Engagement" / "Close — Pending Docs" buttons in the `UNDER_REVIEW` header. The endpoint queries IR documents (NDA + SOW) and auto-routes to `CLOSED` if both present, or `CLOSED_PENDING_IR_DOCS` if either is missing. The admin can no longer manually select the wrong close state.
+- **Smart close endpoint** — `POST /api/admin/engagements/{id}/close` for closing from `UNDER_REVIEW`. The endpoint queries IR documents (NDA + SOW) and auto-routes to `CLOSED` if both present, or `PENDING_CLOSURE` if either is missing. The admin can no longer manually select the wrong close state.
 
 ### Inline email editing in Engagement Detail
 
 - **`EmailEditRow` component** — replaces the static `InfoRow` for Vendor Emails and IR Emails in `EngagementDetail.jsx`. View mode shows current addresses with an Edit button. Edit mode shows each address as a removable chip; a text input with Enter/Add adds new addresses with format validation and duplicate detection; Save PATCHes `{ vendor_emails }` or `{ ir_emails }` to `/api/admin/engagements/{id}` and refreshes the engagement. No backend changes required.
+
+### PENDING_CLOSURE + IR document lock
+
+- **`CLOSED_PENDING_IR_DOCS` renamed to `PENDING_CLOSURE`** — enum value updated in model, migration, lifecycle, and all routers. Frontend STATUS_LABELS updated across Dashboard, EngagementDetail, EvaluationPortal, VendorQuestionnaire.
+- **Removed auto-advance to CLOSED** — IR uploading NDA/SOW no longer automatically advances the engagement from `PENDING_CLOSURE` to `CLOSED`. The transition is now a manual admin action.
+- **`POST /api/admin/engagements/{id}/close-from-pending`** — new endpoint; validates engagement is in `PENDING_CLOSURE` and risk assessment is finalised; transitions to `CLOSED`.
+- **"Close Engagement" button in PENDING_CLOSURE** — shown in the engagement detail header alongside "Move to Under Review"; calls the new endpoint.
+- **IR document lock on CLOSED** — `POST /{token}/files` and `DELETE /{token}/files/{id}` in the evaluation router now return HTTP 403 if engagement status is `CLOSED`. The IR portal shows a locked notice and hides upload zones and delete buttons when status is `CLOSED`.
 
 ---
 

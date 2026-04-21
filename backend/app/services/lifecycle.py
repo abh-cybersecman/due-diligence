@@ -17,10 +17,10 @@ VALID_TRANSITIONS: dict[EngagementStatus, list[EngagementStatus]] = {
     ],
     EngagementStatus.RISK_ASSESSMENT_PENDING: [
         EngagementStatus.CLOSED,
-        EngagementStatus.CLOSED_PENDING_IR_DOCS,
+        EngagementStatus.PENDING_CLOSURE,
         EngagementStatus.DD_IN_PROGRESS,  # admin reopen
     ],
-    EngagementStatus.CLOSED_PENDING_IR_DOCS: [
+    EngagementStatus.PENDING_CLOSURE: [
         EngagementStatus.CLOSED,
         EngagementStatus.UNDER_REVIEW,
     ],
@@ -29,7 +29,7 @@ VALID_TRANSITIONS: dict[EngagementStatus, list[EngagementStatus]] = {
     ],
     EngagementStatus.UNDER_REVIEW: [
         EngagementStatus.CLOSED,
-        EngagementStatus.CLOSED_PENDING_IR_DOCS,
+        EngagementStatus.PENDING_CLOSURE,
     ],
 }
 

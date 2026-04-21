@@ -22,7 +22,7 @@ DRAFT
   → PENDING_DISPATCH                 (automatic: IR uploads functional evaluation)
   → DD_IN_PROGRESS                   (admin clicks "Dispatch to Vendor")
   → RISK_ASSESSMENT_PENDING          (automatic: vendor submits)
-  → CLOSED / CLOSED_PENDING_IR_DOCS  (admin finalises risk assessment)
+  → CLOSED / PENDING_CLOSURE         (admin finalises risk assessment)
   → UNDER_REVIEW                     (admin manually reopens closed engagement)
 ```
 
@@ -30,7 +30,7 @@ DRAFT
 
 `DD_IN_PROGRESS` covers the full active questionnaire window, from dispatch through to vendor submission. The IR portal shows a read-only Vendor Responses tab once this status is reached.
 
-`CLOSED_PENDING_IR_DOCS` auto-resolves to `CLOSED` the moment both NDA and SOW are uploaded by IR.
+`PENDING_CLOSURE` means the risk assessment has been finalised but NDA or SOW documents are still missing. The admin manually clicks **Close Engagement** once documents are in place; IR document uploads and deletes are permitted in this state. Once the engagement reaches `CLOSED`, the IR portal locks all document changes — the admin must move to `UNDER_REVIEW` first to re-enable them.
 
 **Engagement Details panel**
 Vendor and IR email lists are editable inline — click Edit next to either field to enter edit mode. Add emails one at a time (Enter or Add button, with format validation and duplicate detection); remove individual emails via the chip × button; Save commits via `PATCH /api/admin/engagements/{id}`.
@@ -42,7 +42,7 @@ Nine key technical fields extracted from the questionnaire responses (service ty
 - Create a draft risk assessment on any engagement.
 - Add, edit, and reorder risk items: each has a description, risk rating (Critical/High/Medium/Low), one or more assignees (drawn from the configurable assignee list), and a mitigation note.
 - Set an overall risk rating and free-text summary.
-- Finalise the assessment — this triggers the engagement to advance from `RISK_ASSESSMENT_PENDING` to `CLOSED` or `CLOSED_PENDING_IR_DOCS` depending on whether both IR documents (NDA + SOW) are present.
+- Finalise the assessment — this triggers the engagement to advance from `RISK_ASSESSMENT_PENDING` to `CLOSED` (if both NDA and SOW are present) or `PENDING_CLOSURE` (if either is missing).
 - Reopen a finalised assessment to DRAFT for revision.
 - Engagements cannot be manually set to CLOSED without a finalised risk assessment.
 - "Generate with AI" button is present and will be wired to the Claude API in Phase 3.
@@ -75,7 +75,7 @@ Accessed at `/due-diligence/evaluation/:token` — the token is generated when t
 - Upload three categories of documents: Functional Evaluation, NDA, SOW.
 - Uploading a Functional Evaluation automatically advances the engagement from `FUNCTIONAL_EVALUATION_PENDING` to `PENDING_DISPATCH`. The admin must then explicitly click **Dispatch to Vendor** to issue the questionnaire link.
 - The Functional Evaluation cannot be deleted once the questionnaire has been dispatched (`DD_IN_PROGRESS` or later). It can be replaced before dispatch if the wrong file was uploaded.
-- Uploading both NDA and SOW when the engagement is `CLOSED_PENDING_IR_DOCS` automatically advances it to `CLOSED`.
+- Document uploads and deletes are permitted in `PENDING_CLOSURE`. Once the admin clicks **Close Engagement**, the IR portal locks — no further changes until the admin moves the engagement to `UNDER_REVIEW`.
 - Two-tab layout: **Pre-DD Documents** (upload) and **Vendor Responses** (read-only, visible from `DD_IN_PROGRESS` onwards). The Vendor Responses tab shows all vendor answers grouped by section with last-updated timestamps.
 - Dark mode toggle; status badge in header.
 
