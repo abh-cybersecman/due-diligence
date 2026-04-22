@@ -47,6 +47,9 @@ Nine key technical fields extracted from the questionnaire responses (service ty
 - Engagements cannot be manually set to CLOSED without a finalised risk assessment.
 - "Generate with AI" button is present and will be wired to the Claude API in Phase 3.
 
+**File management**
+Admin can delete any file (IR documents or vendor attachments) from the Files tab regardless of engagement status. Clicking Delete opens a password confirmation modal — the admin must re-enter their password before the deletion proceeds. Deletions are permanent and audit-logged.
+
 **Responses view**
 Read-only view of all vendor questionnaire answers, grouped by section. File upload questions show download links. All files are served through an authenticated endpoint — never directly from disk.
 

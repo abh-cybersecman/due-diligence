@@ -128,6 +128,14 @@
 
 - **`EmailEditRow` component** — replaces the static `InfoRow` for Vendor Emails and IR Emails in `EngagementDetail.jsx`. View mode shows current addresses with an Edit button. Edit mode shows each address as a removable chip; a text input with Enter/Add adds new addresses with format validation and duplicate detection; Save PATCHes `{ vendor_emails }` or `{ ir_emails }` to `/api/admin/engagements/{id}` and refreshes the engagement. No backend changes required.
 
+### Admin file deletion with password confirmation
+
+- **`DELETE /api/admin/engagements/{id}/files/{file_id}`** — new endpoint; accepts `{ "password": "..." }` in the request body; verifies the password against `settings.admin_password_hash` via bcrypt; returns 403 if incorrect. On success: deletes the DB record, writes an `file.admin_delete` audit log entry, commits, then removes the file from disk. No lifecycle-state restrictions — admin can delete any file at any status.
+- **`AdminFileDeleteRequest` Pydantic model** — `password: str` field; defined inline in `routers/admin/engagements.py`.
+- **`verify_password` import** — `services/auth.py::verify_password` imported into the engagements router for the password check.
+- **`DeleteFileModal` component** — password confirmation modal in `EngagementDetail.jsx`; auto-focuses the password input; shows inline error on wrong password; calls the delete endpoint; on success removes the file from local state and closes the modal. Clicking the overlay or Cancel closes without action.
+- **Delete button in FilesTab** — red "Delete" button (`btn-danger`) alongside the existing Download button on every file row (both IR Documents and Vendor Attachments sections); clicking opens the `DeleteFileModal` for that specific file.
+
 ### PENDING_CLOSURE + IR document lock
 
 - **`CLOSED_PENDING_IR_DOCS` renamed to `PENDING_CLOSURE`** — enum value updated in model, migration, lifecycle, and all routers. Frontend STATUS_LABELS updated across Dashboard, EngagementDetail, EvaluationPortal, VendorQuestionnaire.

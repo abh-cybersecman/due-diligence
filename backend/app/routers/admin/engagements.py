@@ -3,6 +3,7 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 from fastapi.responses import FileResponse, Response as FastAPIResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,7 +28,7 @@ from app.schemas.engagement import (
     SetStatusRequest,
 )
 from app.services.audit import log_action
-from app.services.auth import get_admin_user
+from app.services.auth import get_admin_user, verify_password
 from app.services.export import generate_export
 from app.services.extraction import extract_structured_fields
 from app.services.lifecycle import validate_transition
@@ -548,6 +549,55 @@ async def download_file(
         media_type=record.mime_type,
         filename=record.original_filename,
     )
+
+
+class AdminFileDeleteRequest(BaseModel):
+    password: str
+
+
+@router.delete("/engagements/{engagement_id}/files/{file_id}", status_code=204)
+async def admin_delete_file(
+    engagement_id: uuid.UUID,
+    file_id: uuid.UUID,
+    body: AdminFileDeleteRequest,
+    admin: str = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """Admin-privileged file deletion — requires password re-confirmation."""
+    if not verify_password(body.password, settings.admin_password_hash):
+        raise HTTPException(status_code=403, detail="Incorrect password")
+
+    result = await db.execute(
+        select(FileUpload).where(
+            FileUpload.id == file_id,
+            FileUpload.engagement_id == engagement_id,
+        )
+    )
+    record = result.scalar_one_or_none()
+    if record is None:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    stored_path = record.stored_path
+    original_name = record.original_filename
+    file_type = record.file_type.value
+
+    await db.delete(record)
+    await log_action(
+        db,
+        actor=admin,
+        actor_type=ActorType.ADMIN,
+        action="file.admin_delete",
+        description=f"Admin deleted file: {original_name} ({file_type})",
+        engagement_id=engagement_id,
+        metadata={"file_id": str(file_id), "filename": original_name, "file_type": file_type},
+    )
+    await db.commit()
+
+    try:
+        if os.path.exists(stored_path):
+            os.unlink(stored_path)
+    except OSError:
+        pass
 
 
 # ---------------------------------------------------------------------------

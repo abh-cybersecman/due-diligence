@@ -932,16 +932,91 @@ function formatBytes(n) {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`
 }
 
-function FilesTab({ engagementId, apiFetch, adminToken }) {
+function DeleteFileModal({ file, engagementId, apiFetch, onSuccess, onClose }) {
+  const [password, setPassword] = useState('')
+  const [error, setError] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const inputRef = useRef(null)
+
+  useEffect(() => { inputRef.current?.focus() }, [])
+
+  async function handleSubmit(e) {
+    e.preventDefault()
+    if (!password) { setError('Password is required'); return }
+    setSubmitting(true)
+    setError('')
+    try {
+      const res = await apiFetch(`/api/admin/engagements/${engagementId}/files/${file.id}`, {
+        method: 'DELETE',
+        body: JSON.stringify({ password }),
+      })
+      if (res.status === 403) { setError('Incorrect password'); return }
+      if (!res.ok) { const d = await res.json().catch(() => ({})); setError(d.detail || 'Delete failed'); return }
+      onSuccess(file.id)
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <div style={modalStyles.overlay} onClick={onClose}>
+      <div style={modalStyles.dialog} onClick={e => e.stopPropagation()}>
+        <h3 style={modalStyles.title}>Delete File</h3>
+        <p style={modalStyles.body}>
+          You are about to permanently delete{' '}
+          <strong style={{ color: 'var(--text-primary)' }}>{file.original_filename}</strong>.
+          This cannot be undone. Enter your admin password to confirm.
+        </p>
+        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <input
+            ref={inputRef}
+            type="password"
+            value={password}
+            onChange={e => setPassword(e.target.value)}
+            placeholder="Admin password"
+            className="input"
+            style={{ width: '100%' }}
+          />
+          {error && <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--risk-high)' }}>{error}</p>}
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+            <button type="button" className="btn btn-secondary" onClick={onClose} disabled={submitting}>Cancel</button>
+            <button type="submit" className="btn btn-danger" disabled={submitting}>
+              {submitting ? 'Deleting…' : 'Delete File'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
+const modalStyles = {
+  overlay: {
+    position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)',
+    display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200,
+  },
+  dialog: {
+    background: 'var(--bg-surface)', border: '1px solid var(--border)',
+    borderRadius: 'var(--radius-md)', padding: '24px', width: 420, maxWidth: '90vw',
+    boxShadow: 'var(--shadow-lg)', display: 'flex', flexDirection: 'column', gap: 16,
+  },
+  title: { margin: 0, fontSize: 'var(--text-md)', fontWeight: 600, color: 'var(--text-primary)' },
+  body: { margin: 0, fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', lineHeight: 1.6 },
+}
+
+function FilesTab({ engagementId, apiFetch }) {
   const [files, setFiles] = useState([])
   const [loading, setLoading] = useState(true)
   const [downloading, setDownloading] = useState(null)
+  const [deleteTarget, setDeleteTarget] = useState(null)
 
-  useEffect(() => {
+  const loadFiles = useCallback(() => {
     apiFetch(`/api/admin/engagements/${engagementId}/files`)
       .then(r => r.ok ? r.json() : [])
       .then(data => { setFiles(data); setLoading(false) })
   }, [apiFetch, engagementId])
+
+  useEffect(() => { loadFiles() }, [loadFiles])
 
   async function download(file) {
     setDownloading(file.id)
@@ -956,6 +1031,11 @@ function FilesTab({ engagementId, apiFetch, adminToken }) {
       URL.revokeObjectURL(url)
     }
     setDownloading(null)
+  }
+
+  function handleDeleteSuccess(fileId) {
+    setFiles(prev => prev.filter(f => f.id !== fileId))
+    setDeleteTarget(null)
   }
 
   if (loading) return <div style={{ padding: 24, color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>Loading…</div>
@@ -987,19 +1067,28 @@ function FilesTab({ engagementId, apiFetch, adminToken }) {
                   {FILE_TYPE_LABELS[f.file_type] || f.file_type}
                 </span>
               </td>
-              <td style={{ ...s.td, ...s.mono, maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.original_filename}</td>
+              <td style={{ ...s.td, ...s.mono, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.original_filename}</td>
               <td style={{ ...s.td, color: 'var(--text-secondary)' }}>{formatBytes(f.file_size_bytes)}</td>
               <td style={{ ...s.td, color: 'var(--text-secondary)' }}>{f.uploaded_by}</td>
               <td style={{ ...s.td, color: 'var(--text-secondary)' }}>{formatDate(f.uploaded_at)}</td>
               <td style={{ ...s.td, textAlign: 'right' }}>
-                <button
-                  className="btn btn-secondary"
-                  style={{ height: 26, padding: '0 10px', fontSize: 'var(--text-xs)' }}
-                  onClick={() => download(f)}
-                  disabled={downloading === f.id}
-                >
-                  {downloading === f.id ? '…' : 'Download'}
-                </button>
+                <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                  <button
+                    className="btn btn-secondary"
+                    style={{ height: 26, padding: '0 10px', fontSize: 'var(--text-xs)' }}
+                    onClick={() => download(f)}
+                    disabled={downloading === f.id}
+                  >
+                    {downloading === f.id ? '…' : 'Download'}
+                  </button>
+                  <button
+                    className="btn btn-danger"
+                    style={{ height: 26, padding: '0 10px', fontSize: 'var(--text-xs)' }}
+                    onClick={() => setDeleteTarget(f)}
+                  >
+                    Delete
+                  </button>
+                </div>
               </td>
             </tr>
           ))}
@@ -1009,27 +1098,38 @@ function FilesTab({ engagementId, apiFetch, adminToken }) {
   }
 
   return (
-    <div style={s.tabContent}>
-      <div className="card" style={{ ...s.panel, marginBottom: 16 }}>
-        <div style={s.panelHeader}>
-          <h3 style={s.panelTitle}>IR Documents</h3>
-          <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>{irFiles.length} file{irFiles.length !== 1 ? 's' : ''}</span>
+    <>
+      {deleteTarget && (
+        <DeleteFileModal
+          file={deleteTarget}
+          engagementId={engagementId}
+          apiFetch={apiFetch}
+          onSuccess={handleDeleteSuccess}
+          onClose={() => setDeleteTarget(null)}
+        />
+      )}
+      <div style={s.tabContent}>
+        <div className="card" style={{ ...s.panel, marginBottom: 16 }}>
+          <div style={s.panelHeader}>
+            <h3 style={s.panelTitle}>IR Documents</h3>
+            <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>{irFiles.length} file{irFiles.length !== 1 ? 's' : ''}</span>
+          </div>
+          <div style={{ overflow: 'hidden' }}>
+            <FileTable items={irFiles} emptyMsg="No IR documents uploaded yet." />
+          </div>
         </div>
-        <div style={{ overflow: 'hidden' }}>
-          <FileTable items={irFiles} emptyMsg="No IR documents uploaded yet." />
-        </div>
-      </div>
 
-      <div className="card" style={{ ...s.panel, marginBottom: 0 }}>
-        <div style={s.panelHeader}>
-          <h3 style={s.panelTitle}>Vendor Attachments</h3>
-          <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>{vendorFiles.length} file{vendorFiles.length !== 1 ? 's' : ''}</span>
-        </div>
-        <div style={{ overflow: 'hidden' }}>
-          <FileTable items={vendorFiles} emptyMsg="No vendor attachments uploaded yet." />
+        <div className="card" style={{ ...s.panel, marginBottom: 0 }}>
+          <div style={s.panelHeader}>
+            <h3 style={s.panelTitle}>Vendor Attachments</h3>
+            <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>{vendorFiles.length} file{vendorFiles.length !== 1 ? 's' : ''}</span>
+          </div>
+          <div style={{ overflow: 'hidden' }}>
+            <FileTable items={vendorFiles} emptyMsg="No vendor attachments uploaded yet." />
+          </div>
         </div>
       </div>
-    </div>
+    </>
   )
 }
 
