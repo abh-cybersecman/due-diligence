@@ -666,7 +666,7 @@ RISK_ASSESSMENT_PENDING
   → DD_IN_PROGRESS                    (admin clicks "Reopen Questionnaire")
 
 PENDING_CLOSURE
-  → CLOSED                            (admin manually clicks "Close Engagement")
+  → CLOSED                            (admin manually clicks "Close Engagement" — requires NDA + SOW present)
   → UNDER_REVIEW                      (admin manually triggers)
 
 CLOSED
