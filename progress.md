@@ -148,6 +148,10 @@
 
 - **Status label fix** — "Risk Pending" corrected to "Risk Assessment Pending" in `Dashboard.jsx` and `EngagementDetail.jsx` `STATUS_LABELS` maps to match the IR portal label.
 
+- **Vendor portal: manual save draft** — debounced autosave removed from `VendorQuestionnaire.jsx`. Text changes now update local state only; a **Save draft** button in the sticky header flushes pending changes to the server on demand. The button is disabled until there are unsaved changes; shows "Saving…" during the request. Reloading the page discards unsaved changes and restores the last saved state — intentional so vendors can recover from mistakes. The `UNDER_REVIEW` info banner wording updated to match the new save model.
+
+- **File limit display removed** — the "X / 20 files · X MB / 100 MB" counters have been removed from both the vendor questionnaire (attachments card header) and the IR portal (docs card footer). The underlying server-side enforcement of those limits is unchanged; errors surface via the existing error banners when a limit is hit.
+
 - **Close Questionnaire (admin)** — new `POST /api/admin/engagements/{id}/close-questionnaire` endpoint transitions `DD_IN_PROGRESS → RISK_ASSESSMENT_PENDING` without requiring vendor submission. "Close Questionnaire" secondary button appears in the engagement detail header when status is `DD_IN_PROGRESS`; symmetrically, "Reopen Questionnaire" appears when `RISK_ASSESSMENT_PENDING`. Audit-logged as `engagement.questionnaire.closed`.
 
 - **IR doc enforcement on `close-from-pending`** — `POST /close-from-pending` (PENDING_CLOSURE → CLOSED) now checks for NDA and SOW presence before allowing closure. Previously the check only ran at risk assessment finalisation; `PENDING_CLOSURE → CLOSED` bypassed it entirely. Returns HTTP 400 naming the missing documents if either is absent.

@@ -98,8 +98,8 @@ Accessed at `/due-diligence/respond/:token` — the token is generated when the 
 
 - Email verification gate: vendor enters their email, checked against `vendor_emails`. JWT is scoped to this specific engagement and validated on every request.
 - 43-question security questionnaire (Q1–30 standard; Q31–43 AI addendum, shown only for AI applications).
-- 800ms debounced autosave; progress is preserved across sessions.
-- FILE_UPLOAD questions (Q9, Q10 — architecture diagrams) support drag-and-drop with per-file and total size limits.
+- **Save draft** button in the sticky header — responses are saved manually on demand rather than automatically. Reloading the page restores the last saved state, so vendors can discard unwanted changes by refreshing.
+- FILE_UPLOAD questions (Q9, Q10 — architecture diagrams) support drag-and-drop with per-file and total size limits enforced server-side.
 - Form becomes read-only once submitted or if the engagement moves out of the active DD window.
 - Submit confirmation modal; submission advances engagement to `RISK_ASSESSMENT_PENDING`.
 

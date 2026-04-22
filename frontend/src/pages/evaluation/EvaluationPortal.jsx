@@ -684,12 +684,6 @@ function PortalContent({ token, session, onLogout }) {
                 ))}
               </div>
 
-              <div style={portalStyles.fileStats}>
-                <span>
-                  {files.length} / 20 files uploaded ·{' '}
-                  {formatBytes(files.reduce((s, f) => s + f.file_size_bytes, 0))} / 100 MB used
-                </span>
-              </div>
             </div>
           )}
 
@@ -791,12 +785,5 @@ const portalStyles = {
   },
   docList: { padding: '16px 24px', display: 'flex', flexDirection: 'column', gap: 20 },
   divider: { height: 1, background: 'var(--border)' },
-  fileStats: {
-    padding: '10px 24px',
-    borderTop: '1px solid var(--border)',
-    background: 'var(--bg-subtle)',
-    fontSize: 'var(--text-xs)',
-    color: 'var(--text-muted)',
-  },
   signedInAs: { fontSize: 'var(--text-xs)', color: 'var(--text-muted)', textAlign: 'center' },
 }

@@ -91,6 +91,7 @@ const saveStyles = {
   saving: { fontSize: 'var(--text-xs)', color: 'var(--text-muted)' },
   saved:  { fontSize: 'var(--text-xs)', color: 'var(--risk-low)', animation: 'fadeIn 150ms ease' },
   error:  { fontSize: 'var(--text-xs)', color: 'var(--risk-high)' },
+  unsaved: { fontSize: 'var(--text-xs)', color: 'var(--text-muted)', fontStyle: 'italic' },
 }
 
 // ─── SubmitModal ──────────────────────────────────────────────────────────────
@@ -282,15 +283,15 @@ export default function VendorQuestionnaire({ token, session, onLogout }) {
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
   const [saveStatus, setSaveStatus] = useState('idle') // idle | saving | saved | error
+  const [hasPendingChanges, setHasPendingChanges] = useState(false)
   const [fileError, setFileError] = useState('')
   const [uploadingQuestion, setUploadingQuestion] = useState(null)
   const [showSubmitModal, setShowSubmitModal] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState('')
 
-  // Pending saves — question_id → response data; flushed after debounce
+  // Pending saves — question_id → response data; flushed on manual save
   const pendingRef = useRef({})
-  const saveTimerRef = useRef(null)
 
   // ── Load data ──────────────────────────────────────────────────────────────
 
@@ -335,7 +336,7 @@ export default function VendorQuestionnaire({ token, session, onLogout }) {
     return () => { cancelled = true }
   }, [token, accessToken, onLogout])
 
-  // ── Autosave ───────────────────────────────────────────────────────────────
+  // ── Save draft ─────────────────────────────────────────────────────────────
 
   const flushSave = useCallback(async () => {
     const pending = Object.values(pendingRef.current)
@@ -357,29 +358,25 @@ export default function VendorQuestionnaire({ token, session, onLogout }) {
       if (!res.ok) throw new Error('Save failed')
 
       setSaveStatus('saved')
+      setHasPendingChanges(false)
       setTimeout(() => setSaveStatus('idle'), 1500)
     } catch {
       setSaveStatus('error')
     }
-  }, [token, accessToken, meta?.status, onLogout])
-
-  function scheduleChange(questionId, value) {
-    pendingRef.current[questionId] = {
-      question_id: questionId,
-      response_text: value,
-      selected_options: responses[questionId]?.selected_options ?? [],
-    }
-    clearTimeout(saveTimerRef.current)
-    setSaveStatus('saving')
-    saveTimerRef.current = setTimeout(flushSave, 800)
-  }
+  }, [token, accessToken, onLogout])
 
   function handleTextChange(questionId, value) {
     setResponses((prev) => ({
       ...prev,
       [questionId]: { ...prev[questionId], response_text: value },
     }))
-    scheduleChange(questionId, value)
+    pendingRef.current[questionId] = {
+      question_id: questionId,
+      response_text: value,
+      selected_options: responses[questionId]?.selected_options ?? [],
+    }
+    setHasPendingChanges(true)
+    if (saveStatus !== 'error') setSaveStatus('idle')
   }
 
   // ── File upload ────────────────────────────────────────────────────────────
@@ -436,7 +433,6 @@ export default function VendorQuestionnaire({ token, session, onLogout }) {
     setSubmitError('')
     try {
       // Flush any pending saves first
-      clearTimeout(saveTimerRef.current)
       await flushSave()
 
       const res = await apiFetch(
@@ -491,7 +487,6 @@ export default function VendorQuestionnaire({ token, session, onLogout }) {
   }, [meta])
 
   const totalFiles = files.length
-  const totalBytes = files.reduce((s, f) => s + f.file_size_bytes, 0)
 
   // ── Render guards ──────────────────────────────────────────────────────────
 
@@ -530,6 +525,16 @@ export default function VendorQuestionnaire({ token, session, onLogout }) {
           </div>
           <div style={s.headerRight}>
             <SaveStatus status={saveStatus} />
+            {isEditable && (
+              <button
+                className="btn btn-secondary"
+                style={{ fontSize: 'var(--text-xs)', height: 28, padding: '0 10px' }}
+                onClick={flushSave}
+                disabled={!hasPendingChanges || saveStatus === 'saving'}
+              >
+                {saveStatus === 'saving' ? 'Saving…' : 'Save draft'}
+              </button>
+            )}
             {meta && (
               <span
                 className="badge"
@@ -557,7 +562,7 @@ export default function VendorQuestionnaire({ token, session, onLogout }) {
           {/* Under review — editable but no submit */}
           {meta?.status === 'UNDER_REVIEW' && (
             <div style={s.infoNotice}>
-              This engagement is under review. You may update your responses — changes are saved automatically and visible to the Albatha Information Security Team.
+              This engagement is under review. You may update your responses — use Save draft to save your changes, which will be visible to the Albatha Information Security Team.
             </div>
           )}
 
@@ -657,9 +662,6 @@ export default function VendorQuestionnaire({ token, session, onLogout }) {
           <div className="card" style={s.attachmentsCard}>
             <div style={s.attachmentsTitle}>
               <span>Attachments</span>
-              <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', fontWeight: 400 }}>
-                {totalFiles} / 20 files · {formatBytes(totalBytes)} / 100 MB
-              </span>
             </div>
             {totalFiles === 0 ? (
               <p style={s.noAttachments}>No attachments uploaded.</p>

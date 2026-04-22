@@ -345,7 +345,7 @@ function OverviewTab({ engagement, apiFetch, onRefresh }) {
       </div>
 
       {/* Cancel / Reopen engagement */}
-      <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '4px 0' }}>
+      <div style={{ display: 'flex', justifyContent: 'flex-start', padding: '4px 0' }}>
         {engagement.status === 'CANCELLED' ? (
           <button className="btn btn-secondary" onClick={handleReopenCancelled}>
             Reopen DD
