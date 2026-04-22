@@ -13,6 +13,7 @@ const STATUS_LABELS = {
   CLOSED: 'Closed',
   PENDING_CLOSURE: 'Pending Closure',
   UNDER_REVIEW: 'Under Review',
+  CANCELLED: 'Cancelled',
 }
 
 const STATUS_COLORS = {
@@ -24,6 +25,7 @@ const STATUS_COLORS = {
   CLOSED: 'var(--status-closed)',
   PENDING_CLOSURE: 'var(--status-closed-pending)',
   UNDER_REVIEW: 'var(--status-under-review)',
+  CANCELLED: 'var(--status-cancelled)',
 }
 
 const ALL_STATUSES = Object.keys(STATUS_LABELS)

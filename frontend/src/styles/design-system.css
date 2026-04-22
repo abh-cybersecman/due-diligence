@@ -36,6 +36,7 @@
   --status-closed:         #70AD47;
   --status-closed-pending: #E53E3E;
   --status-under-review:   #2B6CB0;
+  --status-cancelled:      #9B3A3A;
 
   --shadow-sm: 0 1px 3px rgba(0,0,0,0.08);
   --shadow-md: 0 4px 12px rgba(0,0,0,0.10);

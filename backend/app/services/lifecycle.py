@@ -31,6 +31,9 @@ VALID_TRANSITIONS: dict[EngagementStatus, list[EngagementStatus]] = {
         EngagementStatus.CLOSED,
         EngagementStatus.PENDING_CLOSURE,
     ],
+    EngagementStatus.CANCELLED: [
+        EngagementStatus.DRAFT,  # admin reopens
+    ],
 }
 
 

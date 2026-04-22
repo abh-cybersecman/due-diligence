@@ -33,6 +33,7 @@ const STATUS_LABELS = {
   CLOSED: 'Closed',
   PENDING_CLOSURE: 'Pending Closure',
   UNDER_REVIEW: 'Under Review',
+  CANCELLED: 'Cancelled',
 }
 const STATUS_COLORS = {
   DRAFT: 'var(--status-draft)',
@@ -43,6 +44,7 @@ const STATUS_COLORS = {
   CLOSED: 'var(--status-closed)',
   PENDING_CLOSURE: 'var(--status-closed-pending)',
   UNDER_REVIEW: 'var(--status-under-review)',
+  CANCELLED: 'var(--status-cancelled)',
 }
 const RISK_LABELS = { CRITICAL: 'Critical', HIGH: 'High', MEDIUM: 'Medium', LOW: 'Low' }
 const RISK_COLORS = {
@@ -119,6 +121,67 @@ function AIButton({ label, tooltip }) {
   )
 }
 
+// ── Cancel engagement modal ────────────────────────────────────────────────────
+
+function CancelEngagementModal({ engagement, apiFetch, onSuccess, onClose }) {
+  const [password, setPassword] = useState('')
+  const [error, setError] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const inputRef = useRef(null)
+
+  useEffect(() => { inputRef.current?.focus() }, [])
+
+  async function handleSubmit(e) {
+    e.preventDefault()
+    if (!password) { setError('Password is required'); return }
+    setSubmitting(true)
+    setError('')
+    try {
+      const res = await apiFetch(`/api/admin/engagements/${engagement.id}/cancel`, {
+        method: 'POST',
+        body: JSON.stringify({ password }),
+      })
+      if (res.status === 403) { setError('Incorrect password'); return }
+      if (!res.ok) { const d = await res.json().catch(() => ({})); setError(d.detail || 'Cancel failed'); return }
+      onSuccess()
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return ReactDOM.createPortal(
+    <div style={modalStyles.overlay} onClick={onClose}>
+      <div style={modalStyles.dialog} onClick={e => e.stopPropagation()}>
+        <h3 style={modalStyles.title}>Cancel Engagement</h3>
+        <p style={modalStyles.body}>
+          You are about to cancel{' '}
+          <strong style={{ color: 'var(--text-primary)' }}>{engagement.doc_number} — {engagement.application_name}</strong>.
+          {' '}This will halt the engagement at its current stage. Enter your admin password to confirm.
+        </p>
+        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <input
+            ref={inputRef}
+            type="password"
+            value={password}
+            onChange={e => setPassword(e.target.value)}
+            placeholder="Admin password"
+            className="input"
+            style={{ width: '100%' }}
+          />
+          {error && <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--risk-high)' }}>{error}</p>}
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+            <button type="button" className="btn btn-secondary" onClick={onClose} disabled={submitting}>Back</button>
+            <button type="submit" className="btn btn-danger" disabled={submitting}>
+              {submitting ? 'Cancelling…' : 'Cancel Engagement'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>,
+    document.body
+  )
+}
+
 // ── Overview tab ──────────────────────────────────────────────────────────────
 
 function OverviewTab({ engagement, apiFetch, onRefresh }) {
@@ -130,6 +193,7 @@ function OverviewTab({ engagement, apiFetch, onRefresh }) {
   const [ocEdit, setOcEdit] = useState(false)
   const [ocDraft, setOcDraft] = useState([])
   const [ocSaving, setOcSaving] = useState(false)
+  const [showCancelModal, setShowCancelModal] = useState(false)
 
   const loadSf = useCallback(async () => {
     const res = await apiFetch(`/api/admin/engagements/${engagement.id}/structured-fields`)
@@ -173,6 +237,17 @@ function OverviewTab({ engagement, apiFetch, onRefresh }) {
       setTimeout(() => setSfSaved(false), 1500)
     }
     setSfSaving(false)
+  }
+
+  async function handleReopenCancelled() {
+    if (!window.confirm(
+      `Reopen "${engagement.application_name}" and return it to Draft?\n\nThe engagement can then progress through the lifecycle again.`
+    )) return
+    const res = await apiFetch(`/api/admin/engagements/${engagement.id}/reopen-from-cancelled`, {
+      method: 'POST',
+      body: '{}',
+    })
+    if (res.ok) onRefresh()
   }
 
   const SF_FIELDS = [
@@ -269,6 +344,19 @@ function OverviewTab({ engagement, apiFetch, onRefresh }) {
         </div>
       </div>
 
+      {/* Cancel / Reopen engagement */}
+      <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '4px 0' }}>
+        {engagement.status === 'CANCELLED' ? (
+          <button className="btn btn-secondary" onClick={handleReopenCancelled}>
+            Reopen DD
+          </button>
+        ) : (
+          <button className="btn btn-danger" onClick={() => setShowCancelModal(true)}>
+            Cancel Engagement
+          </button>
+        )}
+      </div>
+
       {/* Structured fields */}
       <div className="card" style={s.panel}>
         <div style={s.panelHeader}>
@@ -298,6 +386,15 @@ function OverviewTab({ engagement, apiFetch, onRefresh }) {
           </div>
         </div>
       </div>
+
+      {showCancelModal && (
+        <CancelEngagementModal
+          engagement={engagement}
+          apiFetch={apiFetch}
+          onSuccess={() => { setShowCancelModal(false); onRefresh() }}
+          onClose={() => setShowCancelModal(false)}
+        />
+      )}
     </div>
   )
 }

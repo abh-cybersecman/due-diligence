@@ -545,6 +545,8 @@ All routes prefixed with `APP_BASE_PATH`. Group by access tier.
   POST   /engagements/{id}/advance          # Draft → IR stage
   POST   /engagements/{id}/reopen              # RISK_ASSESSMENT_PENDING → DD_IN_PROGRESS
   POST   /engagements/{id}/close-questionnaire # DD_IN_PROGRESS → RISK_ASSESSMENT_PENDING
+  POST   /engagements/{id}/cancel              # any → CANCELLED (password required)
+  POST   /engagements/{id}/reopen-from-cancelled # CANCELLED → DRAFT
   POST   /engagements/{id}/set-status          # Manual status changes
   GET    /engagements/{id}/responses
   GET    /engagements/{id}/files/{file_id}  # Authenticated file download
@@ -674,6 +676,12 @@ CLOSED
 
 UNDER_REVIEW
   → CLOSED or PENDING_CLOSURE         (admin manually closes again — check IR doc status)
+
+ANY STATUS (except CANCELLED)
+  → CANCELLED                         (admin clicks "Cancel Engagement" — requires password re-confirmation)
+
+CANCELLED
+  → DRAFT                             (admin clicks "Reopen DD" — yes/no confirmation only)
 ```
 
 Vendor form is editable (autosave, file upload/delete) in: `DD_IN_PROGRESS`, `UNDER_REVIEW`.

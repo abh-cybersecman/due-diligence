@@ -367,6 +367,77 @@ async def close_questionnaire(
     return EngagementResponse.model_validate(await _fetch_engagement(db, engagement_id))
 
 
+class CancelEngagementRequest(BaseModel):
+    password: str
+
+
+@router.post("/engagements/{engagement_id}/cancel", response_model=EngagementResponse)
+async def cancel_engagement(
+    engagement_id: uuid.UUID,
+    body: CancelEngagementRequest,
+    admin: str = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+) -> EngagementResponse:
+    """Cancel engagement from any status — requires password re-confirmation."""
+    if not verify_password(body.password, settings.admin_password_hash):
+        raise HTTPException(status_code=403, detail="Incorrect password")
+
+    engagement = await _get_engagement_or_404(db, engagement_id)
+
+    if engagement.status == EngagementStatus.CANCELLED:
+        raise HTTPException(status_code=400, detail="Engagement is already cancelled")
+
+    old_status = engagement.status
+    engagement.status = EngagementStatus.CANCELLED
+    engagement.updated_at = datetime.now(timezone.utc)
+
+    await log_action(
+        db,
+        actor=admin,
+        actor_type=ActorType.ADMIN,
+        action="engagement.cancelled",
+        description=f"Engagement {engagement.doc_number} cancelled: {old_status.value} → CANCELLED",
+        engagement_id=engagement_id,
+        metadata={"from": old_status.value, "to": EngagementStatus.CANCELLED.value},
+    )
+
+    await db.flush()
+    return EngagementResponse.model_validate(await _fetch_engagement(db, engagement_id))
+
+
+@router.post("/engagements/{engagement_id}/reopen-from-cancelled", response_model=EngagementResponse)
+async def reopen_from_cancelled(
+    engagement_id: uuid.UUID,
+    admin: str = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+) -> EngagementResponse:
+    """Reopen a cancelled engagement, returning it to DRAFT."""
+    engagement = await _get_engagement_or_404(db, engagement_id)
+
+    if engagement.status != EngagementStatus.CANCELLED:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Engagement is not cancelled (current: {engagement.status.value})",
+        )
+
+    old_status = engagement.status
+    engagement.status = EngagementStatus.DRAFT
+    engagement.updated_at = datetime.now(timezone.utc)
+
+    await log_action(
+        db,
+        actor=admin,
+        actor_type=ActorType.ADMIN,
+        action="engagement.reopened_from_cancelled",
+        description=f"Engagement {engagement.doc_number} reopened from cancelled: CANCELLED → DRAFT",
+        engagement_id=engagement_id,
+        metadata={"from": old_status.value, "to": EngagementStatus.DRAFT.value},
+    )
+
+    await db.flush()
+    return EngagementResponse.model_validate(await _fetch_engagement(db, engagement_id))
+
+
 @router.post("/engagements/{engagement_id}/set-status", response_model=EngagementResponse)
 async def set_status(
     engagement_id: uuid.UUID,

@@ -17,6 +17,7 @@ class EngagementStatus(str, enum.Enum):
     CLOSED = "CLOSED"
     PENDING_CLOSURE = "PENDING_CLOSURE"
     UNDER_REVIEW = "UNDER_REVIEW"
+    CANCELLED = "CANCELLED"
 
 
 # Association table for engagement <-> operating company
