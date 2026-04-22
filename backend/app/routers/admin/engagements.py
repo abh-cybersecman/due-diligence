@@ -484,6 +484,26 @@ async def close_from_pending(
             detail="A finalised risk assessment is required before closing the engagement",
         )
 
+    docs_result = await db.execute(
+        select(FileUpload).where(
+            FileUpload.engagement_id == engagement_id,
+            FileUpload.file_type.in_([FileType.IR_NDA, FileType.IR_SOW]),
+        )
+    )
+    ir_docs = docs_result.scalars().all()
+    has_nda = any(f.file_type == FileType.IR_NDA for f in ir_docs)
+    has_sow = any(f.file_type == FileType.IR_SOW for f in ir_docs)
+    if not (has_nda and has_sow):
+        missing = []
+        if not has_nda:
+            missing.append("NDA")
+        if not has_sow:
+            missing.append("SOW")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot close: missing IR document(s): {', '.join(missing)}. Request the IR to upload the required documents.",
+        )
+
     old_status = engagement.status
     engagement.status = EngagementStatus.CLOSED
     engagement.updated_at = datetime.now(timezone.utc)
