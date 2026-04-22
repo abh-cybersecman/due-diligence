@@ -144,6 +144,16 @@
 - **"Close Engagement" button in PENDING_CLOSURE** — shown in the engagement detail header alongside "Move to Under Review"; calls the new endpoint.
 - **IR document lock on CLOSED** — `POST /{token}/files` and `DELETE /{token}/files/{id}` in the evaluation router now return HTTP 403 if engagement status is `CLOSED`. The IR portal shows a locked notice and hides upload zones and delete buttons when status is `CLOSED`.
 
+### Post-Phase 2 refinements
+
+- **Status label fix** — "Risk Pending" corrected to "Risk Assessment Pending" in `Dashboard.jsx` and `EngagementDetail.jsx` `STATUS_LABELS` maps to match the IR portal label.
+
+- **Close Questionnaire (admin)** — new `POST /api/admin/engagements/{id}/close-questionnaire` endpoint transitions `DD_IN_PROGRESS → RISK_ASSESSMENT_PENDING` without requiring vendor submission. "Close Questionnaire" secondary button appears in the engagement detail header when status is `DD_IN_PROGRESS`; symmetrically, "Reopen Questionnaire" appears when `RISK_ASSESSMENT_PENDING`. Audit-logged as `engagement.questionnaire.closed`.
+
+- **IR doc enforcement on `close-from-pending`** — `POST /close-from-pending` (PENDING_CLOSURE → CLOSED) now checks for NDA and SOW presence before allowing closure. Previously the check only ran at risk assessment finalisation; `PENDING_CLOSURE → CLOSED` bypassed it entirely. Returns HTTP 400 naming the missing documents if either is absent.
+
+- **Cancel Engagement** — new `CANCELLED` lifecycle status with Alembic migration `0003`. Any engagement (regardless of current status) can be cancelled by admin via `POST /api/admin/engagements/{id}/cancel` with password re-confirmation (bcrypt verify, same pattern as file deletion). A `CancelEngagementModal` (password modal, btn-danger) sits between the Engagement Details and Structured Fields panels on the Overview tab. Cancelled engagements can be reopened to `DRAFT` via `POST /api/admin/engagements/{id}/reopen-from-cancelled` (no password — yes/no browser confirm only). The cancel button becomes "Reopen DD" when status is `CANCELLED`. `--status-cancelled: #9B3A3A` CSS variable added; `CANCELLED` wired into STATUS_LABELS/STATUS_COLORS on Dashboard and EngagementDetail. CLAUDE.md lifecycle diagram and API route list updated throughout.
+
 ---
 
 ## Phase 3 — Not started

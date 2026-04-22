@@ -21,16 +21,21 @@ DRAFT
   → FUNCTIONAL_EVALUATION_PENDING    (admin triggers manually)
   → PENDING_DISPATCH                 (automatic: IR uploads functional evaluation)
   → DD_IN_PROGRESS                   (admin clicks "Dispatch to Vendor")
-  → RISK_ASSESSMENT_PENDING          (automatic: vendor submits)
+  → RISK_ASSESSMENT_PENDING          (automatic: vendor submits, or admin clicks "Close Questionnaire")
   → CLOSED / PENDING_CLOSURE         (admin finalises risk assessment)
   → UNDER_REVIEW                     (admin manually reopens closed engagement)
+
+ANY STATUS → CANCELLED               (admin — requires password re-confirmation)
+CANCELLED  → DRAFT                   (admin reopens — yes/no confirmation)
 ```
 
 `PENDING_DISPATCH` indicates the functional evaluation has been received and the vendor questionnaire is ready to go — the admin explicitly dispatches it rather than the link going live automatically.
 
-`DD_IN_PROGRESS` covers the full active questionnaire window, from dispatch through to vendor submission. The IR portal shows a read-only Vendor Responses tab once this status is reached.
+`DD_IN_PROGRESS` covers the full active questionnaire window, from dispatch through to vendor submission. Admin can also close the questionnaire manually ("Close Questionnaire" button) to advance without waiting for vendor submission. The IR portal shows a read-only Vendor Responses tab once this status is reached.
 
-`PENDING_CLOSURE` means the risk assessment has been finalised but NDA or SOW documents are still missing. The admin manually clicks **Close Engagement** once documents are in place; IR document uploads and deletes are permitted in this state. Once the engagement reaches `CLOSED`, the IR portal locks all document changes — the admin must move to `UNDER_REVIEW` first to re-enable them.
+`PENDING_CLOSURE` means the risk assessment has been finalised but NDA or SOW documents are still missing. The admin manually clicks **Close Engagement** once both documents are in place — this is enforced server-side and will return an error naming any missing documents. IR document uploads and deletes are permitted in this state. Once the engagement reaches `CLOSED`, the IR portal locks all document changes — the admin must move to `UNDER_REVIEW` first to re-enable them.
+
+`CANCELLED` can be set from any point in the lifecycle. It requires the admin to re-enter their password. A cancelled engagement can be reopened to `DRAFT` with a simple yes/no confirmation.
 
 **Engagement Details panel**
 Vendor and IR email lists are editable inline — click Edit next to either field to enter edit mode. Add emails one at a time (Enter or Add button, with format validation and duplicate detection); remove individual emails via the chip × button; Save commits via `PATCH /api/admin/engagements/{id}`.
@@ -46,6 +51,9 @@ Nine key technical fields extracted from the questionnaire responses (service ty
 - Reopen a finalised assessment to DRAFT for revision.
 - Engagements cannot be manually set to CLOSED without a finalised risk assessment.
 - "Generate with AI" button is present and will be wired to the Claude API in Phase 3.
+
+**Cancel Engagement**
+Any engagement can be cancelled from any lifecycle stage. The "Cancel Engagement" button (in red) sits between the Engagement Details and Structured Fields panels on the Overview tab. Clicking it opens a password confirmation modal — the admin must re-enter their password before the cancellation proceeds. The action is audit-logged. A cancelled engagement shows a "Reopen DD" button in the same position; clicking it (yes/no confirmation, no password) returns the engagement to `DRAFT` so it can progress through the lifecycle again.
 
 **File management**
 Admin can delete any file (IR documents or vendor attachments) from the Files tab regardless of engagement status. Clicking Delete opens a password confirmation modal — the admin must re-enter their password before the deletion proceeds. Deletions are permanent and audit-logged.
