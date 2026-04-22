@@ -543,8 +543,9 @@ All routes prefixed with `APP_BASE_PATH`. Group by access tier.
   GET    /engagements/{id}
   PATCH  /engagements/{id}
   POST   /engagements/{id}/advance          # Draft → IR stage
-  POST   /engagements/{id}/reopen           # Submitted → In Progress
-  POST   /engagements/{id}/set-status       # Manual status changes
+  POST   /engagements/{id}/reopen              # RISK_ASSESSMENT_PENDING → DD_IN_PROGRESS
+  POST   /engagements/{id}/close-questionnaire # DD_IN_PROGRESS → RISK_ASSESSMENT_PENDING
+  POST   /engagements/{id}/set-status          # Manual status changes
   GET    /engagements/{id}/responses
   GET    /engagements/{id}/files/{file_id}  # Authenticated file download
   GET    /engagements/{id}/structured-fields
@@ -657,10 +658,12 @@ PENDING_DISPATCH
 
 DD_IN_PROGRESS
   → RISK_ASSESSMENT_PENDING           (automatic: when vendor submits)
+  → RISK_ASSESSMENT_PENDING           (admin clicks "Close Questionnaire" — manual close without vendor submission)
 
 RISK_ASSESSMENT_PENDING
   → CLOSED                            (admin finalises risk assessment AND NDA + SOW present)
   → PENDING_CLOSURE                   (admin finalises risk assessment AND NDA or SOW missing)
+  → DD_IN_PROGRESS                    (admin clicks "Reopen Questionnaire")
 
 PENDING_CLOSURE
   → CLOSED                            (admin manually clicks "Close Engagement")

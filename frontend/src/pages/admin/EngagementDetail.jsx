@@ -29,7 +29,7 @@ const STATUS_LABELS = {
   FUNCTIONAL_EVALUATION_PENDING: 'IR Docs Pending',
   PENDING_DISPATCH: 'Pending Dispatch',
   DD_IN_PROGRESS: 'DD In Progress',
-  RISK_ASSESSMENT_PENDING: 'Risk Pending',
+  RISK_ASSESSMENT_PENDING: 'Risk Assessment Pending',
   CLOSED: 'Closed',
   PENDING_CLOSURE: 'Pending Closure',
   UNDER_REVIEW: 'Under Review',
@@ -1191,6 +1191,7 @@ export default function EngagementDetail() {
       res = await apiFetch(`/api/admin/engagements/${id}/dispatch`, { method: 'POST', body: '{}' })
     }
     else if (type === 'reopen-dd') res = await apiFetch(`/api/admin/engagements/${id}/reopen`, { method: 'POST', body: '{}' })
+    else if (type === 'close-questionnaire') res = await apiFetch(`/api/admin/engagements/${id}/close-questionnaire`, { method: 'POST', body: '{}' })
     else if (type === 'under-review') res = await apiFetch(`/api/admin/engagements/${id}/set-status`, { method: 'POST', body: JSON.stringify({ status: 'UNDER_REVIEW' }) })
     else if (type === 'close') res = await apiFetch(`/api/admin/engagements/${id}/set-status`, { method: 'POST', body: JSON.stringify({ status: 'CLOSED' }) })
     else if (type === 'close-from-pending') res = await apiFetch(`/api/admin/engagements/${id}/close-from-pending`, { method: 'POST', body: '{}' })
@@ -1235,6 +1236,9 @@ export default function EngagementDetail() {
             )}
             {st === 'PENDING_DISPATCH' && (
               <button className="btn btn-primary" onClick={() => doAction('dispatch')}>Dispatch to Vendor</button>
+            )}
+            {st === 'DD_IN_PROGRESS' && (
+              <button className="btn btn-secondary" onClick={() => doAction('close-questionnaire')}>Close Questionnaire</button>
             )}
             {st === 'RISK_ASSESSMENT_PENDING' && (
               <button className="btn btn-secondary" onClick={() => doAction('reopen-dd')}>Reopen Questionnaire</button>

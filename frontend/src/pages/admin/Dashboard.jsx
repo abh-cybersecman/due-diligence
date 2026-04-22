@@ -9,7 +9,7 @@ const STATUS_LABELS = {
   FUNCTIONAL_EVALUATION_PENDING: 'IR Docs Pending',
   PENDING_DISPATCH: 'Pending Dispatch',
   DD_IN_PROGRESS: 'DD In Progress',
-  RISK_ASSESSMENT_PENDING: 'Risk Pending',
+  RISK_ASSESSMENT_PENDING: 'Risk Assessment Pending',
   CLOSED: 'Closed',
   PENDING_CLOSURE: 'Pending Closure',
   UNDER_REVIEW: 'Under Review',

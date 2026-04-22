@@ -336,6 +336,37 @@ async def reopen_engagement(
     return EngagementResponse.model_validate(await _fetch_engagement(db, engagement_id))
 
 
+@router.post("/engagements/{engagement_id}/close-questionnaire", response_model=EngagementResponse)
+async def close_questionnaire(
+    engagement_id: uuid.UUID,
+    admin: str = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+) -> EngagementResponse:
+    """Close vendor questionnaire: DD_IN_PROGRESS → RISK_ASSESSMENT_PENDING."""
+    engagement = await _get_engagement_or_404(db, engagement_id)
+    validate_transition(engagement.status, EngagementStatus.RISK_ASSESSMENT_PENDING)
+
+    old_status = engagement.status
+    engagement.status = EngagementStatus.RISK_ASSESSMENT_PENDING
+    engagement.updated_at = datetime.now(timezone.utc)
+
+    await log_action(
+        db,
+        actor=admin,
+        actor_type=ActorType.ADMIN,
+        action="engagement.questionnaire.closed",
+        description=(
+            f"Engagement {engagement.doc_number} questionnaire closed: "
+            f"{old_status.value} → RISK_ASSESSMENT_PENDING"
+        ),
+        engagement_id=engagement_id,
+        metadata={"from": old_status.value, "to": EngagementStatus.RISK_ASSESSMENT_PENDING.value},
+    )
+
+    await db.flush()
+    return EngagementResponse.model_validate(await _fetch_engagement(db, engagement_id))
+
+
 @router.post("/engagements/{engagement_id}/set-status", response_model=EngagementResponse)
 async def set_status(
     engagement_id: uuid.UUID,
