@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
+import ReactDOM from 'react-dom'
 import { useNavigate, useParams } from 'react-router-dom'
 import AdminLayout from '../../components/admin/AdminLayout'
 import { useAuth } from '../../contexts/AuthContext'
@@ -958,7 +959,7 @@ function DeleteFileModal({ file, engagementId, apiFetch, onSuccess, onClose }) {
     }
   }
 
-  return (
+  return ReactDOM.createPortal(
     <div style={modalStyles.overlay} onClick={onClose}>
       <div style={modalStyles.dialog} onClick={e => e.stopPropagation()}>
         <h3 style={modalStyles.title}>Delete File</h3>
@@ -986,13 +987,15 @@ function DeleteFileModal({ file, engagementId, apiFetch, onSuccess, onClose }) {
           </div>
         </form>
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }
 
 const modalStyles = {
   overlay: {
-    position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)',
+    position: 'fixed', inset: 0,
+    background: 'rgba(0,0,0,0.45)',
     display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200,
   },
   dialog: {
