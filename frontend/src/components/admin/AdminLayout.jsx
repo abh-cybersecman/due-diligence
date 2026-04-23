@@ -3,8 +3,31 @@ import { NavLink, useNavigate } from 'react-router-dom'
 import { useAuth } from '../../contexts/AuthContext'
 import { BASE_PATH } from '../../config'
 
+function FileTextIcon({ size = 14 }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" />
+      <path d="M14 2v4a2 2 0 0 0 2 2h4" />
+      <path d="M10 9H8" />
+      <path d="M16 13H8" />
+      <path d="M16 17H8" />
+    </svg>
+  )
+}
+
 const NAV = [
   { to: '/admin/dashboard', label: 'Dashboard' },
+  { to: '/admin/questionnaire', label: 'Questionnaire', icon: <FileTextIcon /> },
   { to: '/admin/settings', label: 'Settings' },
 ]
 
@@ -50,7 +73,7 @@ export default function AdminLayout({ children }) {
 
           <nav style={s.nav}>
             <div style={s.navSection}>NAVIGATION</div>
-            {NAV.map(({ to, label }) => (
+            {NAV.map(({ to, label, icon }) => (
               <NavLink
                 key={to}
                 to={to}
@@ -59,6 +82,7 @@ export default function AdminLayout({ children }) {
                   ...(isActive ? s.navItemActive : {}),
                 })}
               >
+                {icon && <span style={s.navIcon}>{icon}</span>}
                 {label}
               </NavLink>
             ))}
@@ -144,7 +168,9 @@ const s = {
     padding: '4px 8px 8px',
   },
   navItem: {
-    display: 'block',
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
     padding: '7px 10px',
     borderRadius: 'var(--radius-sm)',
     fontSize: 'var(--text-sm)',
@@ -153,6 +179,15 @@ const s = {
     textDecoration: 'none',
     borderLeft: '2px solid transparent',
     transition: 'background-color 150ms ease, color 150ms ease',
+  },
+  navIcon: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 14,
+    height: 14,
+    color: 'currentColor',
+    flexShrink: 0,
   },
   navItemActive: {
     background: 'var(--accent-subtle)',

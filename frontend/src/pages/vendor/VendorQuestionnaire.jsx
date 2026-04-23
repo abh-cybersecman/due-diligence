@@ -274,13 +274,20 @@ const fzStyles = {
 
 // ─── Main questionnaire ───────────────────────────────────────────────────────
 
-export default function VendorQuestionnaire({ token, session, onLogout }) {
-  const { accessToken, email } = session
+export default function VendorQuestionnaire({
+  token,
+  session,
+  onLogout,
+  previewMode = false,
+  previewData = null,
+}) {
+  const accessToken = session?.accessToken
+  const email = session?.email
 
-  const [meta, setMeta] = useState(null)        // engagement info + questions
+  const [meta, setMeta] = useState(previewMode ? previewData?.meta ?? null : null)
   const [responses, setResponses] = useState({}) // question_id → { response_text, selected_options }
-  const [files, setFiles] = useState([])
-  const [loading, setLoading] = useState(true)
+  const [files, setFiles] = useState(previewMode ? [] : [])
+  const [loading, setLoading] = useState(!previewMode)
   const [loadError, setLoadError] = useState('')
   const [saveStatus, setSaveStatus] = useState('idle') // idle | saving | saved | error
   const [hasPendingChanges, setHasPendingChanges] = useState(false)
@@ -296,6 +303,14 @@ export default function VendorQuestionnaire({ token, session, onLogout }) {
   // ── Load data ──────────────────────────────────────────────────────────────
 
   useEffect(() => {
+    if (previewMode) {
+      setMeta(previewData?.meta ?? null)
+      setFiles([])
+      setResponses({})
+      setLoading(false)
+      return
+    }
+
     let cancelled = false
 
     async function load() {
@@ -334,7 +349,7 @@ export default function VendorQuestionnaire({ token, session, onLogout }) {
 
     load()
     return () => { cancelled = true }
-  }, [token, accessToken, onLogout])
+  }, [token, accessToken, onLogout, previewMode, previewData])
 
   // ── Save draft ─────────────────────────────────────────────────────────────
 
@@ -457,8 +472,8 @@ export default function VendorQuestionnaire({ token, session, onLogout }) {
 
   // ── Derived state ──────────────────────────────────────────────────────────
 
-  const isEditable = meta ? EDITABLE_STATUSES.has(meta.status) : false
-  const canSubmit = meta ? SUBMIT_STATUSES.has(meta.status) : false
+  const isEditable = previewMode ? false : (meta ? EDITABLE_STATUSES.has(meta.status) : false)
+  const canSubmit = previewMode ? false : (meta ? SUBMIT_STATUSES.has(meta.status) : false)
 
   const sections = useMemo(() => {
     if (!meta?.questions) return []
@@ -524,8 +539,8 @@ export default function VendorQuestionnaire({ token, session, onLogout }) {
             </span>
           </div>
           <div style={s.headerRight}>
-            <SaveStatus status={saveStatus} />
-            {isEditable && (
+            {!previewMode && <SaveStatus status={saveStatus} />}
+            {!previewMode && isEditable && (
               <button
                 className="btn btn-secondary"
                 style={{ fontSize: 'var(--text-xs)', height: 28, padding: '0 10px' }}
@@ -535,22 +550,33 @@ export default function VendorQuestionnaire({ token, session, onLogout }) {
                 {saveStatus === 'saving' ? 'Saving…' : 'Save draft'}
               </button>
             )}
-            {meta && (
+            {previewMode ? (
               <span
                 className="badge"
-                style={{ background: statusColor + '22', color: statusColor }}
+                style={{ background: 'var(--accent-subtle)', color: 'var(--accent)' }}
               >
-                {statusLabel}
+                Preview
               </span>
+            ) : (
+              meta && (
+                <span
+                  className="badge"
+                  style={{ background: statusColor + '22', color: statusColor }}
+                >
+                  {statusLabel}
+                </span>
+              )
             )}
             <ThemeToggle />
-            <button
-              className="btn btn-secondary"
-              style={{ fontSize: 'var(--text-xs)', height: 28, padding: '0 10px' }}
-              onClick={onLogout}
-            >
-              Sign out
-            </button>
+            {!previewMode && (
+              <button
+                className="btn btn-secondary"
+                style={{ fontSize: 'var(--text-xs)', height: 28, padding: '0 10px' }}
+                onClick={onLogout}
+              >
+                Sign out
+              </button>
+            )}
           </div>
         </div>
       </header>
@@ -559,15 +585,24 @@ export default function VendorQuestionnaire({ token, session, onLogout }) {
       <main style={s.main}>
         <div style={s.content} className="fade-in">
 
+          {/* Preview banner */}
+          {previewMode && (
+            <div style={s.infoNotice}>
+              <strong>Preview mode.</strong> This is how the questionnaire will appear to vendors
+              for the current draft version <strong>{meta?.version_label}</strong>. All inputs are
+              read-only and nothing entered here is saved.
+            </div>
+          )}
+
           {/* Under review — editable but no submit */}
-          {meta?.status === 'UNDER_REVIEW' && (
+          {!previewMode && meta?.status === 'UNDER_REVIEW' && (
             <div style={s.infoNotice}>
               This engagement is under review. You may update your responses — use Save draft to save your changes, which will be visible to the Albatha Information Security Team.
             </div>
           )}
 
           {/* Read-only notice */}
-          {!isEditable && (
+          {!previewMode && !isEditable && (
             <div style={s.readOnlyNotice}>
               {meta?.status === 'RISK_ASSESSMENT_PENDING'
                 ? 'This questionnaire has been submitted and is under review. No further changes can be made.'
@@ -576,18 +611,18 @@ export default function VendorQuestionnaire({ token, session, onLogout }) {
           )}
 
           {/* Submission success */}
-          {meta?.status === 'RISK_ASSESSMENT_PENDING' && (
+          {!previewMode && meta?.status === 'RISK_ASSESSMENT_PENDING' && (
             <div style={s.successNotice}>
               ✓ Questionnaire submitted. The Albatha Information Security Team will review your
               responses and be in touch.
             </div>
           )}
 
-          {submitError && (
+          {!previewMode && submitError && (
             <div style={s.errorBanner}>{submitError}</div>
           )}
 
-          {fileError && (
+          {!previewMode && fileError && (
             <div style={s.errorBanner}>{fileError}</div>
           )}
 
@@ -659,6 +694,7 @@ export default function VendorQuestionnaire({ token, session, onLogout }) {
           ))}
 
           {/* Attachments summary */}
+          {!previewMode && (
           <div className="card" style={s.attachmentsCard}>
             <div style={s.attachmentsTitle}>
               <span>Attachments</span>
@@ -680,6 +716,7 @@ export default function VendorQuestionnaire({ token, session, onLogout }) {
               </div>
             )}
           </div>
+          )}
 
           {/* Submit */}
           {canSubmit && (
@@ -697,9 +734,11 @@ export default function VendorQuestionnaire({ token, session, onLogout }) {
             </div>
           )}
 
-          <p style={s.signedInAs}>
-            Signed in as <strong>{email}</strong>
-          </p>
+          {!previewMode && (
+            <p style={s.signedInAs}>
+              Signed in as <strong>{email}</strong>
+            </p>
+          )}
         </div>
       </main>
 

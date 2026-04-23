@@ -8,6 +8,8 @@ import Dashboard from './pages/admin/Dashboard'
 import NewEngagement from './pages/admin/NewEngagement'
 import EngagementDetail from './pages/admin/EngagementDetail'
 import Settings from './pages/admin/Settings'
+import Questionnaire from './pages/admin/Questionnaire'
+import QuestionnairePreview from './pages/admin/QuestionnairePreview'
 import { BASE_PATH } from './config'
 
 function ProtectedAdmin({ children }) {
@@ -37,6 +39,8 @@ export default function App() {
           <Route path="/admin/engagements/new" element={<ProtectedAdmin><NewEngagement /></ProtectedAdmin>} />
           <Route path="/admin/engagements/:id" element={<ProtectedAdmin><EngagementDetail /></ProtectedAdmin>} />
           <Route path="/admin/settings" element={<ProtectedAdmin><Settings /></ProtectedAdmin>} />
+          <Route path="/admin/questionnaire" element={<ProtectedAdmin><Questionnaire /></ProtectedAdmin>} />
+          <Route path="/admin/questionnaire/preview" element={<ProtectedAdmin><QuestionnairePreview /></ProtectedAdmin>} />
 
           {/* Portals */}
           <Route path="/evaluation/:token" element={<EvaluationPortal />} />
