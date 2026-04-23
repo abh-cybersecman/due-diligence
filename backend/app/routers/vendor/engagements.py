@@ -15,6 +15,8 @@ from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from sqlalchemy.orm import selectinload
+
 from app.database import get_db
 from app.models.audit_log import ActorType
 from app.models.engagement import Engagement, EngagementStatus
@@ -83,7 +85,12 @@ async def get_form_metadata(
 ) -> EngagementFormOut:
     engagement, _ = auth
 
-    q_result = await db.execute(select(Question).order_by(Question.order))
+    q_result = await db.execute(
+        select(Question)
+        .where(Question.version_id == engagement.questionnaire_version_id)
+        .options(selectinload(Question.section))
+        .order_by(Question.order)
+    )
     questions = q_result.scalars().all()
 
     f_result = await db.execute(
@@ -99,7 +106,19 @@ async def get_form_metadata(
         application_name=engagement.application_name,
         status=engagement.status.value,
         is_ai_application=engagement.is_ai_application,
-        questions=[QuestionOut.model_validate(q) for q in questions],
+        questions=[
+            QuestionOut(
+                id=q.id,
+                question_number=q.question_number,
+                section=q.section.title,
+                question_text=q.question_text,
+                response_type=q.response_type.value,
+                is_ai_addendum=q.section.is_ai_addendum,
+                is_required=q.is_required,
+                order=q.order,
+            )
+            for q in questions
+        ],
         files=[VendorFileOut.model_validate(f) for f in files],
     )
 

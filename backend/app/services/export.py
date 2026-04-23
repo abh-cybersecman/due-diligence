@@ -286,17 +286,18 @@ def _questionnaire(
 ) -> None:
     _h1(doc, "3.  Due Diligence Questionnaire")
 
-    standard = [q for q in questions if not q.is_ai_addendum]
-    addendum = [q for q in questions if q.is_ai_addendum]
+    standard = [q for q in questions if not q.section.is_ai_addendum]
+    addendum = [q for q in questions if q.section.is_ai_addendum]
 
-    # Group standard questions by section (preserve order)
+    # Group standard questions by section title (preserve order)
     seen: list[str] = []
     by_section: dict[str, list] = {}
     for q in standard:
-        if q.section not in by_section:
-            seen.append(q.section)
-            by_section[q.section] = []
-        by_section[q.section].append(q)
+        title = q.section.title
+        if title not in by_section:
+            seen.append(title)
+            by_section[title] = []
+        by_section[title].append(q)
 
     for section in seen:
         _h2(doc, section)
@@ -329,7 +330,12 @@ async def generate_export(engagement_id: uuid.UUID, db: AsyncSession) -> bytes:
     if eng is None:
         raise ValueError(f"Engagement {engagement_id} not found")
 
-    q_result = await db.execute(select(Question).order_by(Question.question_number))
+    q_result = await db.execute(
+        select(Question)
+        .where(Question.version_id == eng.questionnaire_version_id)
+        .options(selectinload(Question.section))
+        .order_by(Question.question_number)
+    )
     questions = list(q_result.scalars().all())
 
     r_result = await db.execute(

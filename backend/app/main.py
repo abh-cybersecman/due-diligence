@@ -1,11 +1,7 @@
-from contextlib import asynccontextmanager
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.database import AsyncSessionLocal
-from app.seed import seed_questions
 from app.routers.admin.audit import router as admin_audit_router
 from app.routers.admin.auth import router as admin_auth_router
 from app.routers.admin.engagements import router as admin_engagements_router
@@ -18,18 +14,11 @@ from app.routers.vendor.auth import router as vendor_auth_router
 from app.routers.vendor.engagements import router as vendor_engagements_router
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    async with AsyncSessionLocal() as db:
-        await seed_questions(db)
-    yield
-
-
+# Questionnaire seeding lives in Alembic migration 0004; no runtime seed hook.
 app = FastAPI(
     title="ISDD Portal API",
     version="1.0.0",
     root_path=settings.app_base_path,
-    lifespan=lifespan,
 )
 
 app.add_middleware(

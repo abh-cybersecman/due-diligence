@@ -9,6 +9,7 @@ from app.database import get_db
 from app.models.audit_log import ActorType
 from app.models.engagement import Engagement, EngagementStatus
 from app.models.file_upload import FileType, FileUpload
+from app.models.question import Question
 from app.models.response import Response
 from app.schemas.engagement import EngagementStatusOut, IRDocumentOut, ResponseDetail
 from app.services.audit import log_action
@@ -73,7 +74,7 @@ async def get_responses(
     result = await db.execute(
         select(Response)
         .where(Response.engagement_id == engagement.id)
-        .options(selectinload(Response.question))
+        .options(selectinload(Response.question).selectinload(Question.section))
     )
     responses = result.scalars().all()
 
@@ -82,7 +83,7 @@ async def get_responses(
             id=r.id,
             question_id=r.question_id,
             question_number=r.question.question_number,
-            section=r.question.section,
+            section=r.question.section.title,
             question_text=r.question.question_text,
             response_text=r.response_text,
             selected_options=r.selected_options,

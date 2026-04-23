@@ -14,6 +14,8 @@ from app.database import get_db
 from app.models.audit_log import ActorType, AuditLog
 from app.models.engagement import Engagement, EngagementStatus
 from app.models.file_upload import FileType, FileUpload
+from app.models.question import Question
+from app.models.questionnaire_version import QuestionnaireVersion
 from app.models.response import Response
 from app.models.risk_assessment import RiskAssessment, RiskAssessmentStatus
 from app.models.settings import OperatingCompany
@@ -133,6 +135,17 @@ async def create_engagement(
     doc_number = await _generate_doc_number(db)
     ocs = await _load_ocs(db, body.operating_company_ids)
 
+    current_version_id = (
+        await db.execute(
+            select(QuestionnaireVersion.id).where(QuestionnaireVersion.is_current.is_(True))
+        )
+    ).scalar_one_or_none()
+    if current_version_id is None:
+        raise HTTPException(
+            status_code=500,
+            detail="No current questionnaire version is published",
+        )
+
     engagement = Engagement(
         doc_number=doc_number,
         application_name=body.application_name,
@@ -140,6 +153,7 @@ async def create_engagement(
         ir_emails=[e.lower().strip() for e in body.ir_emails],
         is_ai_application=body.is_ai_application,
         internal_notes=body.internal_notes,
+        questionnaire_version_id=current_version_id,
     )
     engagement.operating_companies = ocs
     db.add(engagement)
@@ -608,7 +622,7 @@ async def get_responses(
     result = await db.execute(
         select(Response)
         .where(Response.engagement_id == engagement_id)
-        .options(selectinload(Response.question))
+        .options(selectinload(Response.question).selectinload(Question.section))
     )
     responses = result.scalars().all()
 
@@ -617,7 +631,7 @@ async def get_responses(
             id=r.id,
             question_id=r.question_id,
             question_number=r.question.question_number,
-            section=r.question.section,
+            section=r.question.section.title,
             question_text=r.question.question_text,
             response_text=r.response_text,
             selected_options=r.selected_options,

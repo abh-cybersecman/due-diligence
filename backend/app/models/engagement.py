@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import String, Boolean, Text, DateTime, Enum as SAEnum, ForeignKey, Table, Column
+from sqlalchemy import String, Boolean, Text, DateTime, Integer, Enum as SAEnum, ForeignKey, Table, Column
 from sqlalchemy.dialects.postgresql import UUID, ARRAY
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 import enum
@@ -49,6 +49,33 @@ class Engagement(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
     submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    questionnaire_version_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("questionnaire_versions.id"),
+        nullable=False,
+    )
+    parent_engagement_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("engagements.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    revision_number: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
+
+    questionnaire_version: Mapped["QuestionnaireVersion"] = relationship(
+        "QuestionnaireVersion",
+        foreign_keys=[questionnaire_version_id],
+    )
+    parent_engagement: Mapped["Engagement | None"] = relationship(
+        "Engagement",
+        remote_side="Engagement.id",
+        foreign_keys=[parent_engagement_id],
+    )
 
     operating_companies: Mapped[list["OperatingCompany"]] = relationship(
         "OperatingCompany",
