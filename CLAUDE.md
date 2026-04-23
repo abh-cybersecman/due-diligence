@@ -9,6 +9,10 @@ Three user types exist:
 - **IT Representative (IR)** — uploads pre-DD documents (functional evaluation, NDA, SOW) via an internal-only portal
 - **Vendor** — completes the security questionnaire via a public-facing portal
 
+### Companion Documents
+
+- **`CLAUDE-questionnaire-versioning.md`** — governs questionnaire structure, versioning, the admin editor, engagement revisions (R1/R2), and response-rendering rules. If anything in CLAUDE.md conflicts with that document, the addendum wins for those topics.
+
 The system is built in four phases. Build phases in order. Do not skip ahead.
 
 ---
@@ -433,6 +437,9 @@ Alembic migrations run automatically on backend startup via an entrypoint script
 - ir_token (UUID, unique)
 - created_at, updated_at (DateTime UTC)
 - submitted_at (DateTime UTC, nullable)
+- questionnaire_version_id (UUID FK → questionnaire_versions, NOT NULL)
+- parent_engagement_id (UUID FK → engagements, nullable)
+- revision_number (Integer, default 0)
 
 **EngagementStatus enum**
 ```
@@ -446,15 +453,22 @@ PENDING_CLOSURE
 UNDER_REVIEW
 ```
 
-**Question**
+**Question** (see CLAUDE-questionnaire-versioning.md for full schema)
 - id (UUID PK)
-- question_number (Integer, unique)
-- section (String)
+- version_id (UUID FK → questionnaire_versions)
+- section_id (UUID FK → questionnaire_sections)
+- question_number (Integer — unique within version, not globally)
+- question_key (String — stable identifier across versions)
 - question_text (Text)
 - response_type (Enum: TEXT, SINGLE_CHOICE, MULTI_CHOICE, FILE_UPLOAD)
-- is_ai_addendum (Boolean)
+- allows_other (Boolean — only meaningful for SINGLE_CHOICE / MULTI_CHOICE)
+- hint_text (Text, nullable)
 - is_required (Boolean)
 - order (Integer)
+
+**QuestionOption, QuestionnaireSection, QuestionnaireVersion** — see addendum.
+
+(The `is_ai_addendum` flag is moved from Question to QuestionnaireSection. The `section` String column is replaced by `section_id`.)
 
 **Response**
 - id (UUID PK)
@@ -462,6 +476,7 @@ UNDER_REVIEW
 - question_id (FK → Question)
 - response_text (Text, nullable)
 - selected_options (ARRAY of String, nullable)
+- other_text (Text, nullable)
 - updated_at (DateTime UTC)
 
 **FileUpload**
@@ -573,6 +588,21 @@ All routes prefixed with `APP_BASE_PATH`. Group by access tier.
   GET    /settings/backup/status
   POST   /settings/backup/trigger          # Requires password re-confirmation
   GET    /settings/backup/download
+  GET    /questionnaire/versions
+  GET    /questionnaire/versions/{id}
+  GET    /questionnaire/draft
+  POST   /questionnaire/draft/sections
+  PATCH  /questionnaire/draft/sections/{id}
+  DELETE /questionnaire/draft/sections/{id}
+  POST   /questionnaire/draft/questions
+  PATCH  /questionnaire/draft/questions/{id}
+  DELETE /questionnaire/draft/questions/{id}
+  POST   /questionnaire/draft/reorder
+  POST   /questionnaire/draft/publish                  # Requires password re-confirmation
+  POST   /questionnaire/draft/discard
+  GET    /questionnaire/draft/diff
+  GET    /questionnaire/preview
+  POST   /engagements/{id}/refresh                     # Requires password re-confirmation
 
 /api/evaluation/
   POST   /auth/verify                       # Email → IR JWT
@@ -699,19 +729,15 @@ Admin can edit structured fields, risk assessment, and internal notes in any sta
 - If no engagements exist yet, start at the value of `DOC_NUMBER_START` env var (default 1001)
 - This is not a database sequence — it is application-level logic
 - The field is editable by admin after creation; edits do not affect the sequence
+- Refreshed engagements use the pattern `{root_doc_number}-R{n}` where `n` is the revision number (1, 2, 3, …). The document-number sequence (MAX+1) ignores `-R*` suffixes — only originals participate in the auto-increment.
 
 ---
 
 ## Questionnaire Seeding
 
-On backend startup (after migrations), check if the `questions` table is empty. If empty, load and insert from `app/seed/questions.json`.
+Questionnaire content is managed via versioned tables. Initial seeding happens **once**, inside Alembic migration `0004_questionnaire_versioning.py`, which creates `questionnaire_versions` row `v1.0`, populates sections and questions from the legacy `questions.json` file, and pins all existing engagements to `v1.0`. The `seed/questions.json` file is retained for reference only and is no longer read at runtime.
 
-Questions 1–30: standard questionnaire  
-Questions 31–43: AI addendum (`is_ai_addendum: true`)
-
-The full question list is specified in Section 4.5 of the requirements document. Implement exactly as specified — question numbers, text, and AI addendum flag must match precisely.
-
-Default `response_type` for all questions: `TEXT` unless otherwise noted. Questions 9 and 10 (diagram uploads) should be `FILE_UPLOAD`.
+The previous `lifespan` event in `main.py` that seeded questions on empty-table startup **must be removed**. After migration `0004`, question management is done exclusively through the admin questionnaire editor UI (see addendum).
 
 ---
 
@@ -818,6 +844,8 @@ The download endpoint streams the `.tar.gz` file with appropriate headers. Rate-
 /due-diligence/admin/engagements/new
 /due-diligence/admin/engagements/:id
 /due-diligence/admin/settings
+/due-diligence/admin/questionnaire
+/due-diligence/admin/questionnaire/preview
 
 /due-diligence/evaluation/:token        # IR portal
 /due-diligence/respond/:token           # Vendor portal
@@ -866,6 +894,20 @@ Vendor and IR routes prompt for email verification before showing any content.
 - [x] Admin can add/remove vendor and IR emails inline from the engagement detail (EmailEditRow with chip UI, format validation, PATCH endpoint)
 - [ ] Database backup (pg_dump + tar.gz + download) — deferred to Phase 3
 
+### Phase Q — Questionnaire Versioning & Engagement Refresh
+
+See CLAUDE-questionnaire-versioning.md for the full spec. Seven sub-phases Q1–Q7.
+Completing Phase Q is a precondition for Phase 3 (AI integration). Phase 3 stubs
+already reference engagement.id, which is stable across this work.
+
+- [ ] Q1 — Schema migration + backfill
+- [ ] Q2 — Admin editor (read-only)
+- [ ] Q3 — Admin editor (write)
+- [ ] Q4 — Publish flow + diff
+- [ ] Q5 — Version-aware rendering + export updates
+- [ ] Q6 — Refresh (R1/R2) flow
+- [ ] Q7 — Dashboard grouping + responses revision selector
+
 ### Phase 3 — Wire AI + Notifications + Backup
 - [ ] Claude API integration for field extraction
 - [ ] Claude API integration for risk assessment generation
@@ -892,6 +934,11 @@ Vendor and IR routes prompt for email verification before showing any content.
 - [x] Upload limits (per-file, per-count, per-total) enforced server-side
 - [ ] Backup endpoint rate-limited and requires password re-confirmation (Phase 3)
 - [x] No secrets in code — all from environment variables
+- [ ] Questionnaire editor endpoints reject writes to non-draft versions (400)
+- [ ] Publish and Refresh require bcrypt password re-confirmation
+- [ ] `other_text` sanitized via bleach on write
+- [ ] `question_key` is server-assigned only, never accepted from request body
+- [ ] Migration `0004` includes a working `downgrade()` for rollback
 
 ---
 
