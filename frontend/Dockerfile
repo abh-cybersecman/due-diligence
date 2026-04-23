@@ -3,7 +3,7 @@ FROM node:20-slim AS builder
 WORKDIR /app
 
 COPY package.json ./
-RUN npm install
+RUN npm install --verbose
 
 # Copy geist font files to public so @font-face rules can reference them at /fonts/
 RUN mkdir -p public/fonts/geist-sans public/fonts/geist-mono && \

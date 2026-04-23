@@ -1,19 +1,36 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import AdminLayout from '../../components/admin/AdminLayout'
 import { useAuth } from '../../contexts/AuthContext'
 import { BASE_PATH } from '../../config'
+import {
+  DndContext,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+} from '@dnd-kit/core'
+import {
+  SortableContext,
+  arrayMove,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
 
 function useAdminFetch() {
   const { adminSession } = useAuth()
-  return (path, opts = {}) =>
-    fetch(`${BASE_PATH}${path}`, {
-      ...opts,
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${adminSession?.accessToken}`,
-        ...(opts.headers || {}),
-      },
-    })
+  return useCallback(
+    (path, opts = {}) =>
+      fetch(`${BASE_PATH}${path}`, {
+        ...opts,
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${adminSession?.accessToken}`,
+          ...(opts.headers || {}),
+        },
+      }),
+    [adminSession]
+  )
 }
 
 const RESPONSE_TYPE_LABELS = {
@@ -22,6 +39,8 @@ const RESPONSE_TYPE_LABELS = {
   MULTI_CHOICE: 'Multi choice',
   FILE_UPLOAD: 'File upload',
 }
+
+const CHOICE_TYPES = new Set(['SINGLE_CHOICE', 'MULTI_CHOICE'])
 
 function formatTimestamp(iso) {
   if (!iso) return '—'
@@ -32,56 +51,124 @@ function formatTimestamp(iso) {
   })
 }
 
-function FileTextIcon({ size = 14 }) {
+// ─── Small icons ───────────────────────────────────────────────────────────
+
+function DragHandleIcon({ size = 14 }) {
   return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" />
-      <path d="M14 2v4a2 2 0 0 0 2 2h4" />
-      <path d="M10 9H8" />
-      <path d="M16 13H8" />
-      <path d="M16 17H8" />
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <circle cx="9" cy="5" r="1.6" /><circle cx="15" cy="5" r="1.6" />
+      <circle cx="9" cy="12" r="1.6" /><circle cx="15" cy="12" r="1.6" />
+      <circle cx="9" cy="19" r="1.6" /><circle cx="15" cy="19" r="1.6" />
     </svg>
   )
 }
 
-export { FileTextIcon }
+function MoreIcon({ size = 14 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <circle cx="5" cy="12" r="1.8" /><circle cx="12" cy="12" r="1.8" /><circle cx="19" cy="12" r="1.8" />
+    </svg>
+  )
+}
+
+function TrashIcon({ size = 14 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M3 6h18" /><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+    </svg>
+  )
+}
+
+export function FileTextIcon({ size = 14 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" />
+      <path d="M14 2v4a2 2 0 0 0 2 2h4" />
+      <path d="M10 9H8" /><path d="M16 13H8" /><path d="M16 17H8" />
+    </svg>
+  )
+}
+
+// ─── Main component ────────────────────────────────────────────────────────
 
 export default function Questionnaire() {
   const adminFetch = useAdminFetch()
   const [draft, setDraft] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  const [tab, setTab] = useState('standard') // 'standard' | 'ai'
+  const [tab, setTab] = useState('standard')
   const [activeSectionId, setActiveSectionId] = useState(null)
+  const [saveStatus, setSaveStatus] = useState('idle')
+  const [typeChangePrompt, setTypeChangePrompt] = useState(null)
+  const [keyChangeNotice, setKeyChangeNotice] = useState(null)
+
+  const loadDraft = useCallback(async () => {
+    try {
+      const res = await adminFetch('/api/admin/questionnaire/draft')
+      if (!res.ok) throw new Error('Failed to load draft questionnaire')
+      const data = await res.json()
+      setDraft(data)
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }, [adminFetch])
 
   useEffect(() => {
-    let cancelled = false
-    async function load() {
-      try {
-        const res = await adminFetch('/api/admin/questionnaire/draft')
-        if (!res.ok) throw new Error('Failed to load draft questionnaire')
-        const data = await res.json()
-        if (cancelled) return
-        setDraft(data)
-      } catch (err) {
-        if (!cancelled) setError(err.message)
-      } finally {
-        if (!cancelled) setLoading(false)
+    loadDraft()
+  }, [loadDraft])
+
+  // Apply a section update locally (no fetch).
+  const applySectionLocal = useCallback((sectionId, patch) => {
+    setDraft((prev) => {
+      if (!prev) return prev
+      return {
+        ...prev,
+        sections: prev.sections.map((s) =>
+          s.id === sectionId ? { ...s, ...patch } : s
+        ),
       }
-    }
-    load()
-    return () => { cancelled = true }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    })
+  }, [])
+
+  const applyQuestionLocal = useCallback((questionId, patchFn) => {
+    setDraft((prev) => {
+      if (!prev) return prev
+      return {
+        ...prev,
+        sections: prev.sections.map((s) => ({
+          ...s,
+          questions: (s.questions || []).map((q) =>
+            q.id === questionId ? patchFn(q) : q
+          ),
+        })),
+      }
+    })
+  }, [])
+
+  const replaceQuestion = useCallback((serverQuestion) => {
+    setDraft((prev) => {
+      if (!prev) return prev
+      return {
+        ...prev,
+        sections: prev.sections.map((s) => {
+          // Remove the question from any section it isn't in, then add/replace
+          // in its new section. This handles inter-section moves.
+          const withoutIt = (s.questions || []).filter((q) => q.id !== serverQuestion.id)
+          if (s.id === serverQuestion.section_id) {
+            return {
+              ...s,
+              questions: [...withoutIt, serverQuestion].sort((a, b) => a.order - b.order),
+            }
+          }
+          return { ...s, questions: withoutIt }
+        }),
+      }
+    })
   }, [])
 
   const sectionsForTab = useMemo(() => {
@@ -89,6 +176,7 @@ export default function Questionnaire() {
     const isAI = tab === 'ai'
     return draft.sections
       .filter((s) => !!s.is_ai_addendum === isAI)
+      .slice()
       .sort((a, b) => a.order - b.order)
   }, [draft, tab])
 
@@ -106,6 +194,192 @@ export default function Questionnaire() {
     [sectionsForTab, activeSectionId]
   )
 
+  // ── API helpers with save status ───────────────────────────────────────
+
+  const withSaveStatus = useCallback(async (fn) => {
+    setSaveStatus('saving')
+    try {
+      const result = await fn()
+      setSaveStatus('saved')
+      setTimeout(() => setSaveStatus((s) => (s === 'saved' ? 'idle' : s)), 1500)
+      return result
+    } catch (err) {
+      setSaveStatus('error')
+      throw err
+    }
+  }, [])
+
+  // ── Section mutations ─────────────────────────────────────────────────
+
+  async function addSection(isAI) {
+    await withSaveStatus(async () => {
+      const res = await adminFetch('/api/admin/questionnaire/draft/sections', {
+        method: 'POST',
+        body: JSON.stringify({
+          title: 'New section',
+          is_ai_addendum: isAI,
+        }),
+      })
+      if (!res.ok) throw new Error('Failed to create section')
+      const section = await res.json()
+      setDraft((prev) => ({ ...prev, sections: [...prev.sections, section] }))
+      setTab(isAI ? 'ai' : 'standard')
+      setActiveSectionId(section.id)
+    })
+  }
+
+  async function saveSection(sectionId, patch) {
+    await withSaveStatus(async () => {
+      const res = await adminFetch(
+        `/api/admin/questionnaire/draft/sections/${sectionId}`,
+        { method: 'PATCH', body: JSON.stringify(patch) }
+      )
+      if (!res.ok) throw new Error('Failed to save section')
+      const updated = await res.json()
+      applySectionLocal(sectionId, updated)
+    })
+  }
+
+  async function deleteSection(sectionId) {
+    await withSaveStatus(async () => {
+      const res = await adminFetch(
+        `/api/admin/questionnaire/draft/sections/${sectionId}`,
+        { method: 'DELETE' }
+      )
+      if (!res.ok) throw new Error('Failed to delete section')
+      setDraft((prev) => ({
+        ...prev,
+        sections: prev.sections.filter((s) => s.id !== sectionId),
+      }))
+    })
+  }
+
+  async function reorderSections(newOrderedSections) {
+    // newOrderedSections is the new order within the current tab's filter.
+    // We apply the new `order` values within that subset.
+    const section_orders = newOrderedSections.map((s, idx) => ({
+      id: s.id,
+      order: idx,
+    }))
+    // Optimistic local update
+    setDraft((prev) => {
+      const idMap = new Map(section_orders.map((o) => [o.id, o.order]))
+      return {
+        ...prev,
+        sections: prev.sections.map((s) =>
+          idMap.has(s.id) ? { ...s, order: idMap.get(s.id) } : s
+        ),
+      }
+    })
+    await withSaveStatus(async () => {
+      const res = await adminFetch('/api/admin/questionnaire/draft/reorder', {
+        method: 'POST',
+        body: JSON.stringify({ section_orders }),
+      })
+      if (!res.ok) throw new Error('Failed to reorder sections')
+    })
+  }
+
+  // ── Question mutations ────────────────────────────────────────────────
+
+  async function addQuestion(sectionId) {
+    await withSaveStatus(async () => {
+      const res = await adminFetch('/api/admin/questionnaire/draft/questions', {
+        method: 'POST',
+        body: JSON.stringify({
+          section_id: sectionId,
+          question_text: 'New question',
+          response_type: 'TEXT',
+          is_required: true,
+        }),
+      })
+      if (!res.ok) throw new Error('Failed to create question')
+      const payload = await res.json()
+      const q = payload.question
+      setDraft((prev) => ({
+        ...prev,
+        sections: prev.sections.map((s) =>
+          s.id === sectionId
+            ? { ...s, questions: [...(s.questions || []), q] }
+            : s
+        ),
+      }))
+    })
+  }
+
+  async function saveQuestion(questionId, patch, { onWarnings } = {}) {
+    return withSaveStatus(async () => {
+      const res = await adminFetch(
+        `/api/admin/questionnaire/draft/questions/${questionId}`,
+        { method: 'PATCH', body: JSON.stringify(patch) }
+      )
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        throw new Error(body.detail || 'Failed to save question')
+      }
+      const payload = await res.json()
+      replaceQuestion(payload.question)
+      if (payload.warnings && payload.warnings.length && onWarnings) {
+        onWarnings(payload.warnings, payload.question)
+      }
+      return payload
+    })
+  }
+
+  async function deleteQuestion(questionId) {
+    await withSaveStatus(async () => {
+      const res = await adminFetch(
+        `/api/admin/questionnaire/draft/questions/${questionId}`,
+        { method: 'DELETE' }
+      )
+      if (!res.ok) throw new Error('Failed to delete question')
+      setDraft((prev) => ({
+        ...prev,
+        sections: prev.sections.map((s) => ({
+          ...s,
+          questions: (s.questions || []).filter((q) => q.id !== questionId),
+        })),
+      }))
+    })
+  }
+
+  async function reorderQuestions(sectionId, orderedQuestions) {
+    const question_orders = {
+      [sectionId]: orderedQuestions.map((q, idx) => ({ id: q.id, order: idx })),
+    }
+    // Optimistic local reorder
+    setDraft((prev) => ({
+      ...prev,
+      sections: prev.sections.map((s) => {
+        if (s.id !== sectionId) return s
+        const orderMap = new Map(question_orders[sectionId].map((o) => [o.id, o.order]))
+        return {
+          ...s,
+          questions: (s.questions || [])
+            .map((q) => (orderMap.has(q.id) ? { ...q, order: orderMap.get(q.id) } : q))
+            .sort((a, b) => a.order - b.order),
+        }
+      }),
+    }))
+    await withSaveStatus(async () => {
+      const res = await adminFetch('/api/admin/questionnaire/draft/reorder', {
+        method: 'POST',
+        body: JSON.stringify({ question_orders }),
+      })
+      if (!res.ok) throw new Error('Failed to reorder questions')
+    })
+  }
+
+  // ── Response-type confirm modal wiring ─────────────────────────────────
+
+  function requestResponseTypeChange(question, newType, commit) {
+    setTypeChangePrompt({
+      question,
+      newType,
+      commit, // function to run if confirmed
+    })
+  }
+
   function openPreview() {
     window.open(`${BASE_PATH}/admin/questionnaire/preview`, '_blank', 'noopener,noreferrer')
   }
@@ -118,10 +392,11 @@ export default function Questionnaire() {
         <div>
           <h1 style={s.pageTitle}>Questionnaire</h1>
           <p style={s.pageSub}>
-            Draft version of the vendor security questionnaire. Editing, publishing and
-            version history arrive in later phases.
+            Draft version of the vendor security questionnaire. Publishing
+            arrives in a later phase — until then changes live in the draft.
           </p>
         </div>
+        <SaveIndicator status={saveStatus} />
       </div>
 
       {loading ? (
@@ -132,7 +407,7 @@ export default function Questionnaire() {
         <div style={s.loading}>No draft available.</div>
       ) : (
         <div style={s.grid} className="fade-in">
-          {/* ── Left column: sections list ────────────────────────────── */}
+          {/* ── Sections column ─────────────────────────────────────────── */}
           <aside style={s.leftCol} className="card">
             <div style={s.tabs}>
               <button
@@ -151,79 +426,49 @@ export default function Questionnaire() {
               </button>
             </div>
 
-            <div style={s.sectionList}>
-              {sectionsForTab.length === 0 ? (
-                <div style={s.emptyHint}>
-                  {tab === 'ai' ? 'No AI addendum sections.' : 'No sections.'}
-                </div>
-              ) : (
-                sectionsForTab.map((section) => {
-                  const isActive = section.id === activeSectionId
-                  const count = section.questions?.length ?? 0
-                  return (
-                    <button
-                      key={section.id}
-                      onClick={() => setActiveSectionId(section.id)}
-                      style={{
-                        ...s.sectionItem,
-                        ...(isActive ? s.sectionItemActive : {}),
-                      }}
-                    >
-                      <span style={s.sectionItemTitle}>{section.title}</span>
-                      <span style={s.sectionItemCount}>
-                        {count} {count === 1 ? 'question' : 'questions'}
-                      </span>
-                    </button>
-                  )
-                })
-              )}
+            <SectionList
+              sections={sectionsForTab}
+              activeSectionId={activeSectionId}
+              onSelect={setActiveSectionId}
+              onReorder={reorderSections}
+              onRename={(id, title) => saveSection(id, { title })}
+              onToggleAI={(sec) =>
+                saveSection(sec.id, { is_ai_addendum: !sec.is_ai_addendum })
+              }
+              onDelete={deleteSection}
+            />
+
+            <div style={s.addSectionRow}>
+              <button
+                className="btn btn-secondary"
+                style={{ width: '100%' }}
+                onClick={() => addSection(tab === 'ai')}
+              >
+                + Add Section
+              </button>
             </div>
           </aside>
 
-          {/* ── Middle column: questions ──────────────────────────────── */}
+          {/* ── Questions column ────────────────────────────────────────── */}
           <main style={s.middleCol}>
             {!activeSection ? (
               <div className="card" style={s.emptyPanel}>
-                Select a section to view its questions.
+                Select a section to view its questions, or add a new one.
               </div>
             ) : (
-              <>
-                <div style={s.sectionHeader}>
-                  <div style={s.sectionTitleGroup}>
-                    {activeSection.is_ai_addendum && (
-                      <span
-                        className="badge"
-                        style={{ background: 'var(--blue-subtle)', color: 'var(--blue)' }}
-                      >
-                        AI Addendum
-                      </span>
-                    )}
-                    <h2 style={s.sectionTitle}>{activeSection.title}</h2>
-                  </div>
-                  <span style={s.sectionCount}>
-                    {activeSection.questions.length}{' '}
-                    {activeSection.questions.length === 1 ? 'question' : 'questions'}
-                  </span>
-                </div>
-
-                <div style={s.questionList}>
-                  {activeSection.questions
-                    .slice()
-                    .sort((a, b) => a.order - b.order)
-                    .map((q) => (
-                      <QuestionCard key={q.id} question={q} />
-                    ))}
-                  {activeSection.questions.length === 0 && (
-                    <div className="card" style={s.emptyPanel}>
-                      No questions in this section.
-                    </div>
-                  )}
-                </div>
-              </>
+              <SectionEditor
+                section={activeSection}
+                onReorderQuestions={(ordered) => reorderQuestions(activeSection.id, ordered)}
+                onAddQuestion={() => addQuestion(activeSection.id)}
+                onSaveQuestion={saveQuestion}
+                onDeleteQuestion={deleteQuestion}
+                onRequestTypeChange={requestResponseTypeChange}
+                onKeyRegenerated={(q) => setKeyChangeNotice(q)}
+              />
             )}
           </main>
 
-          {/* ── Right column: metadata panel ──────────────────────────── */}
+          {/* ── Right metadata panel ────────────────────────────────────── */}
           <aside style={s.rightCol} className="card">
             <div style={s.metaSection}>
               <div style={s.metaLabel}>DRAFT VERSION</div>
@@ -232,7 +477,7 @@ export default function Questionnaire() {
                 <span className="badge" style={s.draftBadge}>Draft</span>
               </div>
               <div style={s.metaHint}>
-                Changes will be applied when the draft is published.
+                Changes apply when the draft is published.
               </div>
             </div>
 
@@ -281,41 +526,668 @@ export default function Questionnaire() {
           </aside>
         </div>
       )}
+
+      {typeChangePrompt && (
+        <ConfirmModal
+          title="Change response type?"
+          body={
+            <>
+              Changing the response type from{' '}
+              <strong>{RESPONSE_TYPE_LABELS[typeChangePrompt.question.response_type]}</strong>{' '}
+              to <strong>{RESPONSE_TYPE_LABELS[typeChangePrompt.newType]}</strong> will
+              treat this as a new question for refresh matching — a new key will be minted.
+              Continue?
+            </>
+          }
+          confirmLabel="Change type"
+          onConfirm={() => {
+            typeChangePrompt.commit()
+            setTypeChangePrompt(null)
+          }}
+          onCancel={() => {
+            typeChangePrompt.commit(null) // signal revert
+            setTypeChangePrompt(null)
+          }}
+        />
+      )}
+
+      {keyChangeNotice && (
+        <Toast
+          message={`New key minted: ${keyChangeNotice.question_key}`}
+          onDismiss={() => setKeyChangeNotice(null)}
+        />
+      )}
     </AdminLayout>
   )
 }
 
-function QuestionCard({ question }) {
-  const typeLabel = RESPONSE_TYPE_LABELS[question.response_type] || question.response_type
+// ─── Save indicator ────────────────────────────────────────────────────────
+
+function SaveIndicator({ status }) {
+  if (status === 'idle') return <span style={s.saveDot} />
+  if (status === 'saving') return <span style={s.saveText}>Saving…</span>
+  if (status === 'saved') return <span style={{ ...s.saveText, color: 'var(--risk-low)' }}>✓ Saved</span>
+  if (status === 'error') return <span style={{ ...s.saveText, color: 'var(--risk-high)' }}>Save failed</span>
+  return null
+}
+
+// ─── Section list (sortable) ───────────────────────────────────────────────
+
+function SectionList({ sections, activeSectionId, onSelect, onReorder, onRename, onToggleAI, onDelete }) {
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }))
+
+  function handleDragEnd(event) {
+    const { active, over } = event
+    if (!over || active.id === over.id) return
+    const oldIndex = sections.findIndex((s) => s.id === active.id)
+    const newIndex = sections.findIndex((s) => s.id === over.id)
+    if (oldIndex === -1 || newIndex === -1) return
+    const reordered = arrayMove(sections, oldIndex, newIndex)
+    onReorder(reordered)
+  }
+
   return (
-    <div className="card" style={s.questionCard}>
-      <div style={s.questionHeader}>
-        <span style={s.questionNumber}>Q{question.question_number}</span>
-        <span style={s.questionText}>{question.question_text}</span>
-      </div>
-      <div style={s.questionMeta}>
-        <span className="badge" style={s.typeBadge}>{typeLabel}</span>
-        <span
-          className="badge"
-          style={question.is_required ? s.requiredBadge : s.optionalBadge}
-        >
-          {question.is_required ? 'Required' : 'Optional'}
-        </span>
-        {question.allows_other && (
-          <span className="badge" style={s.otherBadge}>Allows "Other"</span>
-        )}
-        {question.options && question.options.length > 0 && (
-          <span style={s.optionCount}>
-            {question.options.length} {question.options.length === 1 ? 'option' : 'options'}
+    <div style={s.sectionList}>
+      {sections.length === 0 ? (
+        <div style={s.emptyHint}>No sections yet.</div>
+      ) : (
+        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+          <SortableContext items={sections.map((s) => s.id)} strategy={verticalListSortingStrategy}>
+            {sections.map((section) => (
+              <SortableSectionItem
+                key={section.id}
+                section={section}
+                isActive={section.id === activeSectionId}
+                onSelect={() => onSelect(section.id)}
+                onRename={(title) => onRename(section.id, title)}
+                onToggleAI={() => onToggleAI(section)}
+                onDelete={() => {
+                  const count = section.questions?.length ?? 0
+                  const msg = count > 0
+                    ? `Delete section "${section.title}"? This will also delete ${count} question${count === 1 ? '' : 's'}.`
+                    : `Delete section "${section.title}"?`
+                  if (window.confirm(msg)) onDelete(section.id)
+                }}
+              />
+            ))}
+          </SortableContext>
+        </DndContext>
+      )}
+    </div>
+  )
+}
+
+function SortableSectionItem({ section, isActive, onSelect, onRename, onToggleAI, onDelete }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: section.id })
+  const [editing, setEditing] = useState(false)
+  const [title, setTitle] = useState(section.title)
+  const [menuOpen, setMenuOpen] = useState(false)
+
+  useEffect(() => { setTitle(section.title) }, [section.title])
+
+  function commit() {
+    const trimmed = title.trim()
+    if (trimmed && trimmed !== section.title) onRename(trimmed)
+    else setTitle(section.title)
+    setEditing(false)
+  }
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.6 : 1,
+  }
+
+  const count = section.questions?.length ?? 0
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={{ ...style, ...s.sectionItem, ...(isActive ? s.sectionItemActive : {}) }}
+    >
+      <button
+        {...attributes}
+        {...listeners}
+        style={s.dragHandleBtn}
+        aria-label="Drag to reorder"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <DragHandleIcon />
+      </button>
+
+      <button style={s.sectionItemBody} onClick={onSelect}>
+        {editing ? (
+          <input
+            autoFocus
+            className="input"
+            style={s.sectionRenameInput}
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            onBlur={commit}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') { e.preventDefault(); commit() }
+              else if (e.key === 'Escape') { setTitle(section.title); setEditing(false) }
+            }}
+            onClick={(e) => e.stopPropagation()}
+          />
+        ) : (
+          <span
+            style={s.sectionItemTitle}
+            onDoubleClick={(e) => { e.stopPropagation(); setEditing(true) }}
+            title="Double-click to rename"
+          >
+            {section.title}
           </span>
         )}
-        <span style={s.questionKey} title="Stable identifier across versions">
-          {question.question_key}
+        <span style={s.sectionItemCount}>
+          {count} {count === 1 ? 'question' : 'questions'}
         </span>
+      </button>
+
+      <div style={{ position: 'relative' }}>
+        <button
+          style={s.iconBtn}
+          onClick={(e) => { e.stopPropagation(); setMenuOpen((v) => !v) }}
+          aria-label="Section menu"
+        >
+          <MoreIcon />
+        </button>
+        {menuOpen && (
+          <>
+            <div style={s.menuBackdrop} onClick={() => setMenuOpen(false)} />
+            <div style={s.menu} onClick={(e) => e.stopPropagation()}>
+              <button style={s.menuItem} onClick={() => { setEditing(true); setMenuOpen(false) }}>
+                Rename
+              </button>
+              <button style={s.menuItem} onClick={() => { onToggleAI(); setMenuOpen(false) }}>
+                {section.is_ai_addendum ? 'Move to Standard' : 'Move to AI Addendum'}
+              </button>
+              <button
+                style={{ ...s.menuItem, color: 'var(--risk-high)' }}
+                onClick={() => { onDelete(); setMenuOpen(false) }}
+              >
+                Delete section
+              </button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   )
 }
+
+// ─── Section editor (middle column) ───────────────────────────────────────
+
+function SectionEditor({
+  section,
+  onReorderQuestions,
+  onAddQuestion,
+  onSaveQuestion,
+  onDeleteQuestion,
+  onRequestTypeChange,
+  onKeyRegenerated,
+}) {
+  const [expandedId, setExpandedId] = useState(null)
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }))
+  const questions = useMemo(
+    () => (section.questions || []).slice().sort((a, b) => a.order - b.order),
+    [section.questions]
+  )
+
+  function handleDragEnd(event) {
+    const { active, over } = event
+    if (!over || active.id === over.id) return
+    const oldIndex = questions.findIndex((q) => q.id === active.id)
+    const newIndex = questions.findIndex((q) => q.id === over.id)
+    if (oldIndex === -1 || newIndex === -1) return
+    onReorderQuestions(arrayMove(questions, oldIndex, newIndex))
+  }
+
+  return (
+    <>
+      <div style={s.sectionHeader}>
+        <div style={s.sectionTitleGroup}>
+          {section.is_ai_addendum && (
+            <span className="badge" style={{ background: 'var(--blue-subtle)', color: 'var(--blue)' }}>
+              AI Addendum
+            </span>
+          )}
+          <h2 style={s.sectionTitle}>{section.title}</h2>
+        </div>
+        <span style={s.sectionCount}>
+          {questions.length} {questions.length === 1 ? 'question' : 'questions'}
+        </span>
+      </div>
+
+      <div style={s.questionList}>
+        {questions.length === 0 ? (
+          <div className="card" style={s.emptyPanel}>
+            No questions yet. Click "+ Add Question" below.
+          </div>
+        ) : (
+          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+            <SortableContext items={questions.map((q) => q.id)} strategy={verticalListSortingStrategy}>
+              {questions.map((q) => (
+                <SortableQuestionCard
+                  key={q.id}
+                  question={q}
+                  expanded={expandedId === q.id}
+                  onToggle={() => setExpandedId((id) => (id === q.id ? null : q.id))}
+                  onSave={onSaveQuestion}
+                  onDelete={() => {
+                    if (window.confirm(`Delete question Q${q.question_number}?`)) onDeleteQuestion(q.id)
+                  }}
+                  onRequestTypeChange={onRequestTypeChange}
+                  onKeyRegenerated={onKeyRegenerated}
+                />
+              ))}
+            </SortableContext>
+          </DndContext>
+        )}
+
+        <button
+          className="btn btn-secondary"
+          style={{ marginTop: 4 }}
+          onClick={onAddQuestion}
+        >
+          + Add Question
+        </button>
+      </div>
+    </>
+  )
+}
+
+// ─── Question card (sortable, collapsed/expanded) ──────────────────────────
+
+function SortableQuestionCard(props) {
+  const { question } = props
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: question.id })
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.6 : 1,
+  }
+  return (
+    <div ref={setNodeRef} style={style}>
+      <QuestionCard
+        {...props}
+        dragAttributes={attributes}
+        dragListeners={listeners}
+      />
+    </div>
+  )
+}
+
+function QuestionCard({
+  question,
+  expanded,
+  onToggle,
+  onSave,
+  onDelete,
+  onRequestTypeChange,
+  onKeyRegenerated,
+  dragAttributes,
+  dragListeners,
+}) {
+  if (!expanded) {
+    return (
+      <div className="card" style={s.questionCard} onClick={onToggle}>
+        <div style={s.questionHeader}>
+          <button
+            {...dragAttributes}
+            {...dragListeners}
+            style={s.dragHandleBtn}
+            onClick={(e) => e.stopPropagation()}
+            aria-label="Drag to reorder"
+          >
+            <DragHandleIcon />
+          </button>
+          <span style={s.questionNumber}>Q{question.question_number}</span>
+          <span style={s.questionText}>{question.question_text}</span>
+        </div>
+        <div style={s.questionMeta}>
+          <span className="badge" style={s.typeBadge}>
+            {RESPONSE_TYPE_LABELS[question.response_type] || question.response_type}
+          </span>
+          <span
+            className="badge"
+            style={question.is_required ? s.requiredBadge : s.optionalBadge}
+          >
+            {question.is_required ? 'Required' : 'Optional'}
+          </span>
+          {question.allows_other && (
+            <span className="badge" style={s.otherBadge}>Allows "Other"</span>
+          )}
+          {question.options && question.options.length > 0 && (
+            <span style={s.optionCount}>
+              {question.options.length} {question.options.length === 1 ? 'option' : 'options'}
+            </span>
+          )}
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <QuestionEditForm
+      key={question.id}
+      question={question}
+      onCollapse={onToggle}
+      onSave={onSave}
+      onDelete={onDelete}
+      onRequestTypeChange={onRequestTypeChange}
+      onKeyRegenerated={onKeyRegenerated}
+      dragAttributes={dragAttributes}
+      dragListeners={dragListeners}
+    />
+  )
+}
+
+function QuestionEditForm({
+  question,
+  onCollapse,
+  onSave,
+  onDelete,
+  onRequestTypeChange,
+  onKeyRegenerated,
+  dragAttributes,
+  dragListeners,
+}) {
+  // Local editable copy. Any edit schedules a debounced save.
+  const [local, setLocal] = useState(question)
+  const [showHint, setShowHint] = useState(Boolean(question.hint_text))
+  const timerRef = useRef(null)
+
+  // Reconcile server-side changes that the user didn't type (key regen, number shifts).
+  useEffect(() => {
+    setLocal((prev) => ({
+      ...prev,
+      question_key: question.question_key,
+      question_number: question.question_number,
+    }))
+  }, [question.question_key, question.question_number])
+
+  const scheduleSave = useCallback((patch, opts = {}) => {
+    if (timerRef.current) clearTimeout(timerRef.current)
+    const delay = opts.immediate ? 0 : 800
+    timerRef.current = setTimeout(() => {
+      onSave(question.id, patch, {
+        onWarnings: (_warnings, serverQ) => onKeyRegenerated?.(serverQ),
+      }).catch(() => {})
+    }, delay)
+  }, [onSave, onKeyRegenerated, question.id])
+
+  useEffect(() => () => { if (timerRef.current) clearTimeout(timerRef.current) }, [])
+
+  function updateField(field, value, { immediate = false } = {}) {
+    setLocal((prev) => ({ ...prev, [field]: value }))
+    scheduleSave({ [field]: value }, { immediate })
+  }
+
+  // Response type change — confirmation modal first.
+  function handleResponseTypeChange(newType) {
+    onRequestTypeChange(local, newType, (confirmedType) => {
+      // commit() → proceed; commit(null) → user cancelled, leave select at its
+      // previous controlled value.
+      if (confirmedType === null) return
+
+      const isChoice = CHOICE_TYPES.has(newType)
+      setLocal((prev) => ({
+        ...prev,
+        response_type: newType,
+        allows_other: isChoice ? prev.allows_other : false,
+        options: isChoice ? prev.options : [],
+      }))
+      scheduleSave(
+        {
+          response_type: newType,
+          allows_other: isChoice ? local.allows_other : false,
+          options: isChoice ? (local.options || []) : [],
+        },
+        { immediate: true }
+      )
+    })
+  }
+
+  function handleOptionChange(idx, label) {
+    const next = local.options.map((o, i) => (i === idx ? { ...o, label } : o))
+    setLocal((prev) => ({ ...prev, options: next }))
+    scheduleSave({ options: next.map((o) => ({ id: o.id, label: o.label })) })
+  }
+
+  function handleAddOption() {
+    const next = [...(local.options || []), { id: null, label: `Option ${(local.options?.length ?? 0) + 1}`, order: (local.options?.length ?? 0) }]
+    setLocal((prev) => ({ ...prev, options: next }))
+    scheduleSave({ options: next.map((o) => ({ id: o.id, label: o.label })) })
+  }
+
+  function handleDeleteOption(idx) {
+    const next = local.options.filter((_, i) => i !== idx)
+    setLocal((prev) => ({ ...prev, options: next }))
+    scheduleSave({ options: next.map((o) => ({ id: o.id, label: o.label })) }, { immediate: true })
+  }
+
+  function handleOptionDragEnd(event) {
+    const { active, over } = event
+    if (!over || active.id === over.id) return
+    const oldIndex = local.options.findIndex((o) => optionKey(o) === active.id)
+    const newIndex = local.options.findIndex((o) => optionKey(o) === over.id)
+    if (oldIndex === -1 || newIndex === -1) return
+    const next = arrayMove(local.options, oldIndex, newIndex)
+    setLocal((prev) => ({ ...prev, options: next }))
+    scheduleSave({ options: next.map((o) => ({ id: o.id, label: o.label })) }, { immediate: true })
+  }
+
+  const isChoice = CHOICE_TYPES.has(local.response_type)
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }))
+
+  return (
+    <div className="card" style={s.editCard}>
+      <div style={s.editHeader}>
+        <button
+          {...dragAttributes}
+          {...dragListeners}
+          style={s.dragHandleBtn}
+          aria-label="Drag to reorder"
+        >
+          <DragHandleIcon />
+        </button>
+        <span style={s.questionNumber}>Q{local.question_number}</span>
+        <span style={s.questionKeyLabel}>Key:</span>
+        <span style={s.questionKey}>{local.question_key}</span>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+          <button className="btn btn-secondary" onClick={onCollapse}>Collapse</button>
+          <button
+            className="btn"
+            style={s.deleteBtn}
+            onClick={onDelete}
+            aria-label="Delete question"
+          >
+            <TrashIcon />
+          </button>
+        </div>
+      </div>
+
+      <div style={s.fieldBlock}>
+        <label style={s.fieldLabel}>Question text</label>
+        <textarea
+          className="input"
+          style={s.textarea}
+          value={local.question_text}
+          onChange={(e) => updateField('question_text', e.target.value)}
+        />
+      </div>
+
+      <div style={s.fieldRow}>
+        <div style={{ flex: 1 }}>
+          <label style={s.fieldLabel}>Response type</label>
+          <select
+            className="input"
+            value={local.response_type}
+            onChange={(e) => {
+              if (e.target.value !== local.response_type) {
+                handleResponseTypeChange(e.target.value)
+              }
+            }}
+          >
+            <option value="TEXT">Text</option>
+            <option value="SINGLE_CHOICE">Single choice</option>
+            <option value="MULTI_CHOICE">Multi choice</option>
+            <option value="FILE_UPLOAD">File upload</option>
+          </select>
+        </div>
+        <label style={{ ...s.fieldLabel, display: 'flex', alignItems: 'center', gap: 8, paddingTop: 26 }}>
+          <input
+            type="checkbox"
+            checked={local.is_required}
+            onChange={(e) => updateField('is_required', e.target.checked, { immediate: true })}
+          />
+          Required
+        </label>
+      </div>
+
+      <div style={s.fieldBlock}>
+        {showHint || local.hint_text ? (
+          <>
+            <label style={s.fieldLabel}>Hint text</label>
+            <textarea
+              className="input"
+              style={s.hintArea}
+              placeholder="Optional — shown below the question"
+              value={local.hint_text || ''}
+              onChange={(e) => updateField('hint_text', e.target.value)}
+            />
+          </>
+        ) : (
+          <button
+            type="button"
+            style={s.linkBtn}
+            onClick={() => setShowHint(true)}
+          >
+            + Add hint
+          </button>
+        )}
+      </div>
+
+      {isChoice && (
+        <div style={s.fieldBlock}>
+          <label style={s.fieldLabel}>Options</label>
+          {(local.options || []).length === 0 ? (
+            <div style={s.emptyOptions}>No options yet.</div>
+          ) : (
+            <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleOptionDragEnd}>
+              <SortableContext
+                items={(local.options || []).map(optionKey)}
+                strategy={verticalListSortingStrategy}
+              >
+                <div style={s.optionList}>
+                  {local.options.map((opt, idx) => (
+                    <SortableOptionRow
+                      key={optionKey(opt)}
+                      option={opt}
+                      onChange={(label) => handleOptionChange(idx, label)}
+                      onDelete={() => handleDeleteOption(idx)}
+                    />
+                  ))}
+                </div>
+              </SortableContext>
+            </DndContext>
+          )}
+          <button
+            type="button"
+            className="btn btn-secondary"
+            style={{ marginTop: 6 }}
+            onClick={handleAddOption}
+          >
+            + Add option
+          </button>
+
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10, fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
+            <input
+              type="checkbox"
+              checked={local.allows_other}
+              onChange={(e) => updateField('allows_other', e.target.checked, { immediate: true })}
+            />
+            Allow "Other" response
+          </label>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function optionKey(opt) {
+  // Stable key for drag items: use id for existing, label+index for new.
+  return opt.id || `new:${opt.label}:${opt.order ?? 0}`
+}
+
+function SortableOptionRow({ option, onChange, onDelete }) {
+  const id = optionKey(option)
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id })
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.6 : 1,
+  }
+  return (
+    <div ref={setNodeRef} style={{ ...style, ...s.optionRow }}>
+      <button
+        {...attributes}
+        {...listeners}
+        style={s.dragHandleBtn}
+        aria-label="Drag to reorder option"
+      >
+        <DragHandleIcon />
+      </button>
+      <input
+        className="input"
+        style={{ flex: 1 }}
+        value={option.label}
+        onChange={(e) => onChange(e.target.value)}
+      />
+      <button
+        className="btn"
+        style={s.deleteBtn}
+        onClick={onDelete}
+        aria-label="Delete option"
+      >
+        <TrashIcon />
+      </button>
+    </div>
+  )
+}
+
+// ─── Confirm modal ─────────────────────────────────────────────────────────
+
+function ConfirmModal({ title, body, confirmLabel, onConfirm, onCancel }) {
+  return (
+    <div style={s.modalOverlay} onClick={onCancel}>
+      <div className="card" style={s.modalCard} onClick={(e) => e.stopPropagation()}>
+        <h3 style={s.modalTitle}>{title}</h3>
+        <div style={s.modalBody}>{body}</div>
+        <div style={s.modalActions}>
+          <button className="btn btn-secondary" onClick={onCancel}>Cancel</button>
+          <button className="btn btn-primary" onClick={onConfirm}>{confirmLabel}</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function Toast({ message, onDismiss }) {
+  useEffect(() => {
+    const t = setTimeout(onDismiss, 3500)
+    return () => clearTimeout(t)
+  }, [onDismiss])
+  return (
+    <div style={s.toast}>
+      <span>{message}</span>
+      <button style={s.toastClose} onClick={onDismiss}>×</button>
+    </div>
+  )
+}
+
+// ─── Styles ────────────────────────────────────────────────────────────────
 
 const s = {
   headerRow: {
@@ -330,11 +1202,13 @@ const s = {
     marginTop: 4, fontSize: 'var(--text-sm)',
     color: 'var(--text-secondary)', maxWidth: 640, lineHeight: 1.5,
   },
+  saveText: {
+    fontSize: 'var(--text-sm)', color: 'var(--text-muted)',
+  },
+  saveDot: { width: 0, height: 0 },
   loading: {
-    padding: '40px 0',
-    textAlign: 'center',
-    fontSize: 'var(--text-sm)',
-    color: 'var(--text-muted)',
+    padding: '40px 0', textAlign: 'center',
+    fontSize: 'var(--text-sm)', color: 'var(--text-muted)',
   },
   errorBanner: {
     padding: '10px 14px',
@@ -362,15 +1236,17 @@ const s = {
     padding: '0 4px',
   },
   tabBtn: {
-    flex: 1,
-    padding: '10px 8px',
-    fontSize: 'var(--text-xs)',
-    letterSpacing: '0.02em',
+    flex: 1, padding: '10px 8px',
+    fontSize: 'var(--text-xs)', letterSpacing: '0.02em',
   },
   sectionList: {
     display: 'flex', flexDirection: 'column',
     padding: 4, gap: 2,
-    overflowY: 'auto',
+    overflowY: 'auto', flex: 1,
+  },
+  addSectionRow: {
+    padding: '8px 8px 10px',
+    borderTop: '1px solid var(--border)',
   },
   emptyHint: {
     padding: '16px 10px',
@@ -378,26 +1254,74 @@ const s = {
     color: 'var(--text-muted)',
   },
   sectionItem: {
-    display: 'flex', flexDirection: 'column', alignItems: 'flex-start',
-    gap: 2, padding: '8px 10px',
-    background: 'transparent', border: 'none',
+    display: 'flex', alignItems: 'center',
+    gap: 4, padding: '4px 4px 4px 4px',
+    background: 'transparent',
     borderLeft: '2px solid transparent',
     borderRadius: 'var(--radius-sm)',
-    textAlign: 'left', cursor: 'pointer',
     color: 'var(--text-secondary)',
     transition: 'background-color 150ms ease, color 150ms ease',
-    fontFamily: 'inherit',
   },
   sectionItemActive: {
     background: 'var(--accent-subtle)',
     borderLeftColor: 'var(--accent)',
     color: 'var(--accent)',
   },
+  sectionItemBody: {
+    flex: 1, minWidth: 0,
+    display: 'flex', flexDirection: 'column', alignItems: 'flex-start',
+    gap: 2, padding: '4px 6px',
+    background: 'transparent', border: 'none',
+    textAlign: 'left', cursor: 'pointer',
+    color: 'inherit', fontFamily: 'inherit',
+  },
   sectionItemTitle: {
     fontSize: 'var(--text-sm)', fontWeight: 500, lineHeight: 1.35,
+    wordBreak: 'break-word',
   },
   sectionItemCount: {
     fontSize: 'var(--text-xs)', color: 'var(--text-muted)',
+  },
+  sectionRenameInput: {
+    height: 28, padding: '2px 6px',
+    fontSize: 'var(--text-sm)',
+    width: '100%',
+  },
+  dragHandleBtn: {
+    background: 'transparent', border: 'none',
+    padding: 4, cursor: 'grab',
+    color: 'var(--text-muted)',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+  },
+  iconBtn: {
+    background: 'transparent', border: 'none',
+    padding: 4, cursor: 'pointer',
+    color: 'var(--text-muted)',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+  },
+  menuBackdrop: {
+    position: 'fixed', inset: 0,
+    zIndex: 20,
+  },
+  menu: {
+    position: 'absolute', right: 0, top: '100%',
+    minWidth: 180,
+    background: 'var(--bg-surface)',
+    border: '1px solid var(--border)',
+    borderRadius: 'var(--radius-sm)',
+    boxShadow: 'var(--shadow-md)',
+    zIndex: 30,
+    padding: 4,
+    display: 'flex', flexDirection: 'column',
+  },
+  menuItem: {
+    background: 'transparent', border: 'none',
+    textAlign: 'left', padding: '6px 10px',
+    fontSize: 'var(--text-sm)',
+    color: 'var(--text-primary)',
+    borderRadius: 'var(--radius-sm)',
+    cursor: 'pointer',
+    fontFamily: 'inherit',
   },
   middleCol: {
     display: 'flex', flexDirection: 'column', gap: 12,
@@ -428,89 +1352,123 @@ const s = {
   questionCard: {
     padding: '12px 14px',
     display: 'flex', flexDirection: 'column', gap: 8,
+    cursor: 'pointer',
+  },
+  editCard: {
+    padding: '14px 16px',
+    display: 'flex', flexDirection: 'column', gap: 12,
+    borderColor: 'var(--accent)',
+    boxShadow: 'var(--shadow-sm)',
+  },
+  editHeader: {
+    display: 'flex', alignItems: 'center', gap: 8,
+    flexWrap: 'wrap',
   },
   questionHeader: {
-    display: 'flex', gap: 12, alignItems: 'flex-start',
+    display: 'flex', gap: 8, alignItems: 'flex-start',
   },
   questionNumber: {
     fontFamily: 'Geist Mono, monospace',
     fontSize: 'var(--text-xs)',
-    fontWeight: 600,
-    color: 'var(--text-muted)',
-    letterSpacing: '0.02em',
-    flexShrink: 0,
-    paddingTop: 2,
-    minWidth: 28,
+    fontWeight: 600, color: 'var(--text-muted)',
+    letterSpacing: '0.02em', flexShrink: 0,
+    paddingTop: 2, minWidth: 28,
   },
   questionText: {
     fontSize: 'var(--text-sm)',
-    color: 'var(--text-primary)',
-    lineHeight: 1.5,
-    flex: 1,
-    wordBreak: 'break-word',
+    color: 'var(--text-primary)', lineHeight: 1.5,
+    flex: 1, wordBreak: 'break-word',
   },
   questionMeta: {
     display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6,
     paddingLeft: 40,
   },
-  typeBadge: {
-    background: 'var(--bg-muted)',
-    color: 'var(--text-secondary)',
-  },
+  typeBadge: { background: 'var(--bg-muted)', color: 'var(--text-secondary)' },
   requiredBadge: {
     background: 'color-mix(in srgb, var(--risk-medium) 18%, transparent)',
     color: 'var(--risk-medium)',
   },
-  optionalBadge: {
-    background: 'var(--bg-subtle)',
-    color: 'var(--text-muted)',
-  },
-  otherBadge: {
-    background: 'var(--blue-subtle)',
-    color: 'var(--blue)',
-  },
-  optionCount: {
-    fontSize: 'var(--text-xs)',
-    color: 'var(--text-muted)',
+  optionalBadge: { background: 'var(--bg-subtle)', color: 'var(--text-muted)' },
+  otherBadge: { background: 'var(--blue-subtle)', color: 'var(--blue)' },
+  optionCount: { fontSize: 'var(--text-xs)', color: 'var(--text-muted)' },
+  questionKeyLabel: {
+    fontSize: 'var(--text-xs)', color: 'var(--text-muted)',
+    textTransform: 'uppercase', letterSpacing: '0.06em',
   },
   questionKey: {
-    marginLeft: 'auto',
     fontFamily: 'Geist Mono, monospace',
     fontSize: 'var(--text-xs)',
     color: 'var(--text-muted)',
   },
-  emptyPanel: {
-    padding: 20,
-    fontSize: 'var(--text-sm)',
+  fieldBlock: {
+    display: 'flex', flexDirection: 'column', gap: 4,
+  },
+  fieldRow: {
+    display: 'flex', gap: 12, alignItems: 'flex-start',
+  },
+  fieldLabel: {
+    fontSize: 'var(--text-xs)',
+    fontWeight: 500,
     color: 'var(--text-muted)',
-    textAlign: 'center',
+    textTransform: 'uppercase',
+    letterSpacing: '0.04em',
+  },
+  textarea: {
+    minHeight: 80, resize: 'vertical',
+    fontFamily: 'inherit', fontSize: 'var(--text-sm)',
+    padding: 8,
+  },
+  hintArea: {
+    minHeight: 60, resize: 'vertical',
+    fontFamily: 'inherit', fontSize: 'var(--text-sm)',
+    padding: 8,
+  },
+  linkBtn: {
+    background: 'transparent', border: 'none',
+    color: 'var(--accent)',
+    fontSize: 'var(--text-sm)',
+    cursor: 'pointer', padding: 0,
+    alignSelf: 'flex-start',
+  },
+  optionList: {
+    display: 'flex', flexDirection: 'column', gap: 6,
+  },
+  optionRow: {
+    display: 'flex', alignItems: 'center', gap: 6,
+  },
+  emptyOptions: {
+    fontSize: 'var(--text-sm)', color: 'var(--text-muted)',
+    padding: '6px 0',
+  },
+  deleteBtn: {
+    background: 'var(--bg-subtle)',
+    border: '1px solid var(--border)',
+    color: 'var(--risk-high)',
+    padding: '0 8px',
+    height: 34,
+  },
+  emptyPanel: {
+    padding: 20, fontSize: 'var(--text-sm)',
+    color: 'var(--text-muted)', textAlign: 'center',
   },
   rightCol: {
-    padding: 0,
-    position: 'sticky', top: 16,
+    padding: 0, position: 'sticky', top: 16,
     display: 'flex', flexDirection: 'column',
   },
   metaSection: {
     padding: '14px 16px',
     display: 'flex', flexDirection: 'column', gap: 6,
   },
-  metaDivider: {
-    height: 1, background: 'var(--border)',
-  },
+  metaDivider: { height: 1, background: 'var(--border)' },
   metaLabel: {
-    fontSize: 'var(--text-xs)',
-    fontWeight: 500,
+    fontSize: 'var(--text-xs)', fontWeight: 500,
     color: 'var(--text-muted)',
-    textTransform: 'uppercase',
-    letterSpacing: '0.06em',
+    textTransform: 'uppercase', letterSpacing: '0.06em',
   },
-  metaVersionRow: {
-    display: 'flex', alignItems: 'center', gap: 8,
-  },
+  metaVersionRow: { display: 'flex', alignItems: 'center', gap: 8 },
   metaVersionLabel: {
     fontFamily: 'Geist Mono, monospace',
-    fontSize: 'var(--text-md)',
-    fontWeight: 600,
+    fontSize: 'var(--text-md)', fontWeight: 600,
     color: 'var(--text-primary)',
   },
   draftBadge: {
@@ -518,18 +1476,48 @@ const s = {
     color: 'var(--status-draft)',
   },
   metaHint: {
-    fontSize: 'var(--text-xs)',
-    color: 'var(--text-muted)',
+    fontSize: 'var(--text-xs)', color: 'var(--text-muted)',
     lineHeight: 1.5,
   },
-  metaValue: {
-    fontSize: 'var(--text-sm)',
+  metaValue: { fontSize: 'var(--text-sm)', color: 'var(--text-primary)' },
+  metaAction: { width: '100%' },
+  metaActions: { display: 'flex', flexDirection: 'column', gap: 8 },
+
+  modalOverlay: {
+    position: 'fixed', inset: 0,
+    background: 'rgba(0,0,0,0.4)',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    zIndex: 50,
+  },
+  modalCard: {
+    maxWidth: 480, padding: 20,
+    display: 'flex', flexDirection: 'column', gap: 14,
+  },
+  modalTitle: {
+    fontSize: 'var(--text-lg)', fontWeight: 600,
     color: 'var(--text-primary)',
   },
-  metaAction: {
-    width: '100%',
+  modalBody: {
+    fontSize: 'var(--text-sm)', color: 'var(--text-secondary)',
+    lineHeight: 1.5,
   },
-  metaActions: {
-    display: 'flex', flexDirection: 'column', gap: 8,
+  modalActions: {
+    display: 'flex', justifyContent: 'flex-end', gap: 8,
+  },
+  toast: {
+    position: 'fixed', bottom: 24, right: 24,
+    background: 'var(--bg-surface)',
+    border: '1px solid var(--border)',
+    borderRadius: 'var(--radius-sm)',
+    boxShadow: 'var(--shadow-md)',
+    padding: '10px 14px',
+    display: 'flex', alignItems: 'center', gap: 12,
+    fontSize: 'var(--text-sm)', color: 'var(--text-primary)',
+    zIndex: 60,
+  },
+  toastClose: {
+    background: 'transparent', border: 'none', cursor: 'pointer',
+    fontSize: 'var(--text-md)', color: 'var(--text-muted)',
+    padding: 0, lineHeight: 1,
   },
 }
