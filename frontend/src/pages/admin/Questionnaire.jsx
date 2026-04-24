@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import AdminLayout from '../../components/admin/AdminLayout'
 import { useAuth } from '../../contexts/AuthContext'
 import { BASE_PATH } from '../../config'
@@ -680,9 +681,48 @@ function SortableSectionItem({ section, isActive, onSelect, onRename, onToggleAI
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: section.id })
   const [editing, setEditing] = useState(false)
   const [title, setTitle] = useState(section.title)
-  const [menuOpen, setMenuOpen] = useState(false)
+  const [menuPos, setMenuPos] = useState(null)
+  const triggerRef = useRef(null)
+  const menuRef = useRef(null)
 
   useEffect(() => { setTitle(section.title) }, [section.title])
+
+  const closeMenu = useCallback(() => setMenuPos(null), [])
+
+  function toggleMenu() {
+    if (menuPos) {
+      closeMenu()
+      return
+    }
+    const rect = triggerRef.current?.getBoundingClientRect()
+    if (!rect) return
+    setMenuPos({
+      top: rect.bottom + 4,
+      right: Math.max(8, window.innerWidth - rect.right),
+    })
+  }
+
+  useEffect(() => {
+    if (!menuPos) return
+    function onDocMouseDown(e) {
+      if (menuRef.current?.contains(e.target)) return
+      if (triggerRef.current?.contains(e.target)) return
+      closeMenu()
+    }
+    function onKey(e) { if (e.key === 'Escape') closeMenu() }
+    document.addEventListener('mousedown', onDocMouseDown)
+    document.addEventListener('keydown', onKey)
+    // capture=true so scrolls inside nested scrollers (e.g. the sections list)
+    // are still observed — scroll events don't bubble.
+    window.addEventListener('scroll', closeMenu, true)
+    window.addEventListener('resize', closeMenu)
+    return () => {
+      document.removeEventListener('mousedown', onDocMouseDown)
+      document.removeEventListener('keydown', onKey)
+      window.removeEventListener('scroll', closeMenu, true)
+      window.removeEventListener('resize', closeMenu)
+    }
+  }, [menuPos, closeMenu])
 
   function commit() {
     const trimmed = title.trim()
@@ -743,34 +783,35 @@ function SortableSectionItem({ section, isActive, onSelect, onRename, onToggleAI
         </span>
       </button>
 
-      <div style={{ position: 'relative' }}>
-        <button
-          style={s.iconBtn}
-          onClick={(e) => { e.stopPropagation(); setMenuOpen((v) => !v) }}
-          aria-label="Section menu"
+      <button
+        ref={triggerRef}
+        style={s.iconBtn}
+        onClick={(e) => { e.stopPropagation(); toggleMenu() }}
+        aria-label="Section menu"
+      >
+        <MoreIcon />
+      </button>
+      {menuPos && createPortal(
+        <div
+          ref={menuRef}
+          style={{ ...s.menu, top: menuPos.top, right: menuPos.right }}
+          onClick={(e) => e.stopPropagation()}
         >
-          <MoreIcon />
-        </button>
-        {menuOpen && (
-          <>
-            <div style={s.menuBackdrop} onClick={() => setMenuOpen(false)} />
-            <div style={s.menu} onClick={(e) => e.stopPropagation()}>
-              <button style={s.menuItem} onClick={() => { setEditing(true); setMenuOpen(false) }}>
-                Rename
-              </button>
-              <button style={s.menuItem} onClick={() => { onToggleAI(); setMenuOpen(false) }}>
-                {section.is_ai_addendum ? 'Move to Standard' : 'Move to AI Addendum'}
-              </button>
-              <button
-                style={{ ...s.menuItem, color: 'var(--risk-high)' }}
-                onClick={() => { onDelete(); setMenuOpen(false) }}
-              >
-                Delete section
-              </button>
-            </div>
-          </>
-        )}
-      </div>
+          <button className="menu-item" onClick={() => { setEditing(true); closeMenu() }}>
+            Rename
+          </button>
+          <button className="menu-item" onClick={() => { onToggleAI(); closeMenu() }}>
+            {section.is_ai_addendum ? 'Move to Standard' : 'Move to AI Addendum'}
+          </button>
+          <button
+            className="menu-item menu-item--danger"
+            onClick={() => { onDelete(); closeMenu() }}
+          >
+            Delete section
+          </button>
+        </div>,
+        document.body
+      )}
     </div>
   )
 }
@@ -1358,29 +1399,16 @@ const s = {
     color: 'var(--text-muted)',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
   },
-  menuBackdrop: {
-    position: 'fixed', inset: 0,
-    zIndex: 20,
-  },
   menu: {
-    position: 'absolute', right: 0, top: '100%',
+    position: 'fixed',
     minWidth: 180,
     background: 'var(--bg-surface)',
     border: '1px solid var(--border)',
     borderRadius: 'var(--radius-sm)',
     boxShadow: 'var(--shadow-md)',
-    zIndex: 30,
+    zIndex: 1000,
     padding: 4,
     display: 'flex', flexDirection: 'column',
-  },
-  menuItem: {
-    background: 'transparent', border: 'none',
-    textAlign: 'left', padding: '6px 10px',
-    fontSize: 'var(--text-sm)',
-    color: 'var(--text-primary)',
-    borderRadius: 'var(--radius-sm)',
-    cursor: 'pointer',
-    fontFamily: 'inherit',
   },
   middleCol: {
     display: 'flex', flexDirection: 'column', gap: 12,

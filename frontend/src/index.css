@@ -243,6 +243,32 @@ button, input, textarea, select, a {
   color: var(--text-primary);
 }
 
+/* ── Dropdown menu items ─────────────────────────────── */
+.menu-item {
+  background: transparent;
+  border: none;
+  text-align: left;
+  padding: 6px 10px;
+  font-family: inherit;
+  font-size: var(--text-sm);
+  color: var(--text-primary);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background-color 150ms ease, color 150ms ease;
+}
+
+.menu-item:hover {
+  background: var(--bg-subtle);
+}
+
+.menu-item--danger {
+  color: var(--risk-high);
+}
+
+.menu-item--danger:hover {
+  background: var(--risk-high-bg);
+}
+
 /* ── Inputs ─────────────────────────────────────────── */
 .input, .textarea {
   width: 100%;
