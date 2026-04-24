@@ -35,6 +35,7 @@ from app.schemas.questionnaire import (
 )
 from app.services.audit import log_action
 from app.services.auth import get_admin_user
+from app.services.questionnaire import renumber_version
 from app.utils.sanitize import sanitize_text
 
 router = APIRouter(prefix="/questionnaire", tags=["admin-questionnaire"])
@@ -623,7 +624,7 @@ async def update_question(
     )
 
 
-@router.delete("/draft/questions/{question_id}", status_code=204)
+@router.delete("/draft/questions/{question_id}", status_code=204, response_model=None)
 async def delete_question(
     question_id: uuid.UUID,
     admin: str = Depends(get_admin_user),
@@ -758,3 +759,34 @@ async def reorder(
         "section_count": section_count,
         "question_count": question_count,
     }
+
+
+# ---------------------------------------------------------------------------
+# Renumber endpoint
+# ---------------------------------------------------------------------------
+
+
+@router.post("/draft/renumber")
+async def renumber_draft(
+    admin: str = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    draft_id_row = await db.execute(
+        select(QuestionnaireVersion.id).where(QuestionnaireVersion.is_draft.is_(True))
+    )
+    draft_id = draft_id_row.scalar_one_or_none()
+    if draft_id is None:
+        raise HTTPException(status_code=404, detail="No draft questionnaire version exists")
+
+    changed_count = await renumber_version(db, draft_id)
+
+    await log_action(
+        db,
+        actor=admin,
+        actor_type=ActorType.ADMIN,
+        action="questionnaire.draft.renumbered",
+        description=f"Draft renumbered ({changed_count} questions updated)",
+        metadata={"changed_count": changed_count},
+    )
+
+    return {"ok": True, "changed_count": changed_count}

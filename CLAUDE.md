@@ -598,7 +598,8 @@ All routes prefixed with `APP_BASE_PATH`. Group by access tier.
   PATCH  /questionnaire/draft/questions/{id}
   DELETE /questionnaire/draft/questions/{id}
   POST   /questionnaire/draft/reorder
-  POST   /questionnaire/draft/publish                  # Requires password re-confirmation
+  POST   /questionnaire/draft/renumber                 # Reassign question_number = 1..N across the draft
+  POST   /questionnaire/draft/publish                  # Requires password re-confirmation (also renumbers)
   POST   /questionnaire/draft/discard
   GET    /questionnaire/draft/diff
   GET    /questionnaire/preview

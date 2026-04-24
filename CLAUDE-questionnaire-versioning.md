@@ -135,10 +135,13 @@ The seeding logic in `main.py` (`lifespan` event) must be updated to skip its cu
 **Edit draft** — admin can freely add/remove/reorder sections and questions, change response types, add options, etc. The draft is not visible to any engagement. Autosave is fine, but a "Preview as vendor" view is essential.
 
 **Publish draft** — admin clicks Publish, enters a required changelog note (min 20 chars) and re-confirms password. In a single transaction:
-1. Current published version's `is_current` flips to `false`.
-2. Draft's `is_draft` flips to `false`, `is_current` flips to `true`, `published_at` stamped, changelog saved.
-3. A new draft is cloned from the just-published version.
-4. Audit log entry: `questionnaire.published` with metadata `{from_version: "v2.0", to_version: "v2.1", changelog: "..."}`.
+1. Call `renumber_version(draft_id)` (`app/services/questionnaire.py`) so `question_number` is gap-free and reflects display order on the frozen version.
+2. Current published version's `is_current` flips to `false`.
+3. Draft's `is_draft` flips to `false`, `is_current` flips to `true`, `published_at` stamped, changelog saved.
+4. A new draft is cloned from the just-published version.
+5. Audit log entry: `questionnaire.published` with metadata `{from_version: "v2.0", to_version: "v2.1", changelog: "..."}`.
+
+Question numbers are not kept in sync with display order during draft editing (reorders only touch `order`). The renumber step on publish — and the "Renumber questions" admin action on the draft editor — are the only times `question_number` is rewritten.
 
 **Discard draft** — admin can wipe the draft and re-clone from current published. Requires yes/no confirmation. Audit-logged.
 
@@ -320,7 +323,8 @@ POST   /questionnaire/draft/questions               # create question in draft
 PATCH  /questionnaire/draft/questions/{id}          # edit question (text, type, required, options, allows_other, hint)
 DELETE /questionnaire/draft/questions/{id}          # delete question
 POST   /questionnaire/draft/reorder                 # batch reorder { section_orders: [...], question_orders: {...} }
-POST   /questionnaire/draft/publish                 # publish draft → new current version (password required)
+POST   /questionnaire/draft/renumber                # reassign question_number = 1..N across the draft
+POST   /questionnaire/draft/publish                 # publish draft → new current version (password required; also renumbers)
 POST   /questionnaire/draft/discard                 # wipe and re-clone from current (yes/no confirm)
 GET    /questionnaire/draft/diff                    # returns diff vs current published version
 GET    /questionnaire/preview                       # public version of draft for preview

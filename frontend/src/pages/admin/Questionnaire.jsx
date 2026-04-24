@@ -104,6 +104,8 @@ export default function Questionnaire() {
   const [saveStatus, setSaveStatus] = useState('idle')
   const [typeChangePrompt, setTypeChangePrompt] = useState(null)
   const [keyChangeNotice, setKeyChangeNotice] = useState(null)
+  const [renumberPrompt, setRenumberPrompt] = useState(false)
+  const [renumberNotice, setRenumberNotice] = useState(null)
 
   const loadDraft = useCallback(async () => {
     try {
@@ -384,6 +386,25 @@ export default function Questionnaire() {
     window.open(`${BASE_PATH}/admin/questionnaire/preview`, '_blank', 'noopener,noreferrer')
   }
 
+  async function runRenumber() {
+    try {
+      const res = await adminFetch('/api/admin/questionnaire/draft/renumber', {
+        method: 'POST',
+      })
+      if (!res.ok) throw new Error('Renumber failed')
+      const data = await res.json()
+      await loadDraft()
+      const n = data.changed_count ?? 0
+      setRenumberNotice(
+        n === 0
+          ? 'Questions already in order — nothing to renumber.'
+          : `Renumbered ${n} question${n === 1 ? '' : 's'}.`
+      )
+    } catch (err) {
+      setRenumberNotice(err.message || 'Renumber failed')
+    }
+  }
+
   const lastEdited = draft ? (draft.updated_at || draft.created_at) : null
 
   return (
@@ -503,6 +524,18 @@ export default function Questionnaire() {
             <div style={s.metaDivider} />
 
             <div style={s.metaSection}>
+              <button
+                className="btn btn-secondary"
+                style={s.metaAction}
+                onClick={() => setRenumberPrompt(true)}
+              >
+                Renumber questions
+              </button>
+            </div>
+
+            <div style={s.metaDivider} />
+
+            <div style={s.metaSection}>
               <div style={s.metaLabel}>ACTIONS</div>
               <div style={s.metaActions}>
                 <button
@@ -555,6 +588,32 @@ export default function Questionnaire() {
         <Toast
           message={`New key minted: ${keyChangeNotice.question_key}`}
           onDismiss={() => setKeyChangeNotice(null)}
+        />
+      )}
+
+      {renumberPrompt && (
+        <ConfirmModal
+          title="Renumber questions?"
+          body={
+            <>
+              Assign sequential question numbers (1, 2, 3…) to every question
+              in the draft based on current order. Existing numbers will be
+              overwritten. Continue?
+            </>
+          }
+          confirmLabel="Renumber"
+          onConfirm={() => {
+            setRenumberPrompt(false)
+            runRenumber()
+          }}
+          onCancel={() => setRenumberPrompt(false)}
+        />
+      )}
+
+      {renumberNotice && (
+        <Toast
+          message={renumberNotice}
+          onDismiss={() => setRenumberNotice(null)}
         />
       )}
     </AdminLayout>
