@@ -138,6 +138,29 @@ export default function Questionnaire() {
   const [renumberNotice, setRenumberNotice] = useState(null)
   const [previewPrompt, setPreviewPrompt] = useState(false)
   const [warningToast, setWarningToast] = useState(null)
+  const [successToast, setSuccessToast] = useState(null)
+
+  // Publish modal
+  const [publishOpen, setPublishOpen] = useState(false)
+  const [publishDiff, setPublishDiff] = useState(null)
+  const [publishDiffLoading, setPublishDiffLoading] = useState(false)
+  const [publishDiffError, setPublishDiffError] = useState('')
+  const [publishChangelog, setPublishChangelog] = useState('')
+  const [publishOverrideEnabled, setPublishOverrideEnabled] = useState(false)
+  const [publishOverrideLabel, setPublishOverrideLabel] = useState('')
+  const [publishPassword, setPublishPassword] = useState('')
+  const [publishSubmitting, setPublishSubmitting] = useState(false)
+  const [publishError, setPublishError] = useState('')
+
+  // Discard modal
+  const [discardOpen, setDiscardOpen] = useState(false)
+  const [discardText, setDiscardText] = useState('')
+  const [discardSubmitting, setDiscardSubmitting] = useState(false)
+  const [discardError, setDiscardError] = useState('')
+
+  // Version history
+  const [versions, setVersions] = useState([])
+  const [versionsOpen, setVersionsOpen] = useState(false)
 
   const dirtyRef = useRef(false)
   dirtyRef.current = dirty
@@ -160,6 +183,21 @@ export default function Questionnaire() {
   useEffect(() => {
     loadDraft()
   }, [loadDraft])
+
+  const loadVersions = useCallback(async () => {
+    try {
+      const res = await adminFetch('/api/admin/questionnaire/versions')
+      if (!res.ok) return
+      const data = await res.json()
+      setVersions(data)
+    } catch {
+      /* non-critical */
+    }
+  }, [adminFetch])
+
+  useEffect(() => {
+    loadVersions()
+  }, [loadVersions])
 
   // Any local mutation flows through this — sets the draft and marks dirty.
   const mutate = useCallback((producer) => {
@@ -482,7 +520,124 @@ export default function Questionnaire() {
     }
   }
 
+  // ── Publish ────────────────────────────────────────────────────────────
+
+  async function openPublish() {
+    if (dirty) return
+    setPublishOpen(true)
+    setPublishDiff(null)
+    setPublishDiffError('')
+    setPublishDiffLoading(true)
+    setPublishChangelog('')
+    setPublishOverrideEnabled(false)
+    setPublishOverrideLabel('')
+    setPublishPassword('')
+    setPublishError('')
+    try {
+      const res = await adminFetch('/api/admin/questionnaire/draft/diff')
+      if (!res.ok) throw new Error('Failed to load diff')
+      const data = await res.json()
+      setPublishDiff(data)
+    } catch (err) {
+      setPublishDiffError(err.message || 'Failed to load diff')
+    } finally {
+      setPublishDiffLoading(false)
+    }
+  }
+
+  function closePublish() {
+    if (publishSubmitting) return
+    setPublishOpen(false)
+  }
+
+  async function submitPublish() {
+    const trimmed = publishChangelog.trim()
+    if (trimmed.length < 20) {
+      setPublishError('Changelog must be at least 20 characters')
+      return
+    }
+    if (!publishPassword) {
+      setPublishError('Password is required')
+      return
+    }
+    if (publishOverrideEnabled && !/^v\d+\.\d+$/.test(publishOverrideLabel.trim())) {
+      setPublishError('Version label must match pattern vMAJOR.MINOR (e.g. v2.0)')
+      return
+    }
+
+    setPublishSubmitting(true)
+    setPublishError('')
+    try {
+      const body = {
+        changelog: trimmed,
+        password: publishPassword,
+      }
+      if (publishOverrideEnabled) {
+        body.version_label = publishOverrideLabel.trim()
+      }
+      const res = await adminFetch('/api/admin/questionnaire/draft/publish', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      })
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}))
+        if (res.status === 403) {
+          throw new Error('Incorrect password')
+        }
+        throw new Error(errBody.detail || 'Publish failed')
+      }
+      const data = await res.json()
+      setPublishOpen(false)
+      await loadDraft()
+      await loadVersions()
+      setSuccessToast(`Published ${data.new_version.version_label}`)
+    } catch (err) {
+      setPublishError(err.message || 'Publish failed')
+    } finally {
+      setPublishSubmitting(false)
+    }
+  }
+
+  // ── Discard ────────────────────────────────────────────────────────────
+
+  function openDiscard() {
+    setDiscardOpen(true)
+    setDiscardText('')
+    setDiscardError('')
+  }
+
+  function closeDiscard() {
+    if (discardSubmitting) return
+    setDiscardOpen(false)
+  }
+
+  async function submitDiscard() {
+    if (discardText !== 'DISCARD') return
+    setDiscardSubmitting(true)
+    setDiscardError('')
+    try {
+      const res = await adminFetch('/api/admin/questionnaire/draft/discard', {
+        method: 'POST',
+      })
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}))
+        throw new Error(errBody.detail || 'Discard failed')
+      }
+      await loadDraft()
+      setDiscardOpen(false)
+      setSuccessToast('Draft discarded — restored from current published version.')
+    } catch (err) {
+      setDiscardError(err.message || 'Discard failed')
+    } finally {
+      setDiscardSubmitting(false)
+    }
+  }
+
   const lastEdited = draft ? (draft.updated_at || draft.created_at) : null
+  const currentVersion = useMemo(
+    () => versions.find((v) => v.is_current) || null,
+    [versions]
+  )
 
   return (
     <AdminLayout>
@@ -650,21 +805,33 @@ export default function Questionnaire() {
                 <button
                   className="btn btn-secondary"
                   style={s.metaAction}
-                  disabled
-                  title="Discard arrives in a later phase"
+                  onClick={openDiscard}
                 >
                   Discard draft
                 </button>
                 <button
                   className="btn btn-primary"
                   style={s.metaAction}
-                  disabled
-                  title="Publish arrives in a later phase"
+                  onClick={openPublish}
+                  disabled={dirty}
+                  title={
+                    dirty
+                      ? 'Save your changes before publishing.'
+                      : 'Publish the draft as a new version'
+                  }
                 >
                   Publish
                 </button>
               </div>
             </div>
+
+            <div style={s.metaDivider} />
+
+            <VersionHistoryPanel
+              versions={versions}
+              open={versionsOpen}
+              onToggle={() => setVersionsOpen((v) => !v)}
+            />
           </aside>
         </div>
       )}
@@ -739,6 +906,48 @@ export default function Questionnaire() {
         <Toast
           message={warningToast}
           onDismiss={() => setWarningToast(null)}
+        />
+      )}
+
+      {successToast && (
+        <Toast
+          message={successToast}
+          onDismiss={() => setSuccessToast(null)}
+        />
+      )}
+
+      {publishOpen && (
+        <PublishModal
+          diff={publishDiff}
+          diffLoading={publishDiffLoading}
+          diffError={publishDiffError}
+          changelog={publishChangelog}
+          onChangeChangelog={setPublishChangelog}
+          overrideEnabled={publishOverrideEnabled}
+          onToggleOverride={(v) => {
+            setPublishOverrideEnabled(v)
+            if (!v) setPublishOverrideLabel('')
+          }}
+          overrideLabel={publishOverrideLabel}
+          onChangeOverrideLabel={setPublishOverrideLabel}
+          password={publishPassword}
+          onChangePassword={setPublishPassword}
+          submitting={publishSubmitting}
+          error={publishError}
+          onCancel={closePublish}
+          onSubmit={submitPublish}
+        />
+      )}
+
+      {discardOpen && (
+        <DiscardModal
+          currentVersionLabel={currentVersion?.version_label || 'current'}
+          text={discardText}
+          onChangeText={setDiscardText}
+          submitting={discardSubmitting}
+          error={discardError}
+          onCancel={closeDiscard}
+          onConfirm={submitDiscard}
         />
       )}
     </AdminLayout>
@@ -1377,6 +1586,499 @@ function PreviewDirtyPrompt({ onSaveAndPreview, onPreviewAnyway, onCancel }) {
   )
 }
 
+// ─── Publish modal ─────────────────────────────────────────────────────────
+
+function PublishModal({
+  diff,
+  diffLoading,
+  diffError,
+  changelog,
+  onChangeChangelog,
+  overrideEnabled,
+  onToggleOverride,
+  overrideLabel,
+  onChangeOverrideLabel,
+  password,
+  onChangePassword,
+  submitting,
+  error,
+  onCancel,
+  onSubmit,
+}) {
+  const [sectionsOpen, setSectionsOpen] = useState(true)
+  const [addedOpen, setAddedOpen] = useState(true)
+  const [removedOpen, setRemovedOpen] = useState(true)
+  const [editedOpen, setEditedOpen] = useState(true)
+
+  const charCount = changelog.trim().length
+  const changelogValid = charCount >= 20
+  const passwordValid = password.length > 0
+  const overrideValid =
+    !overrideEnabled || /^v\d+\.\d+$/.test(overrideLabel.trim())
+  const canSubmit =
+    !submitting && changelogValid && passwordValid && overrideValid && diff
+
+  const hasSectionChanges =
+    diff &&
+    ((diff.sections?.added?.length || 0) +
+      (diff.sections?.removed?.length || 0) +
+      (diff.sections?.renamed?.length || 0) >
+      0)
+
+  const questionsAdded = diff?.questions?.added || []
+  const questionsRemoved = diff?.questions?.removed || []
+  const questionsEdited = diff?.questions?.edited || []
+  const unchangedCount = diff?.questions?.unchanged_count ?? 0
+
+  return (
+    <div style={s.modalOverlay} onClick={onCancel}>
+      <div
+        className="card"
+        style={s.publishModalCard}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div style={s.publishHeader}>
+          <h3 style={s.modalTitle}>Publish draft</h3>
+          {diff && (
+            <div style={s.publishVersionStrip}>
+              <span style={s.publishVersionFrom}>
+                {diff.from_version_label || '—'}
+              </span>
+              <span style={s.publishVersionArrow}>→</span>
+              <span style={s.publishVersionTo}>
+                {overrideEnabled && overrideValid && overrideLabel.trim()
+                  ? overrideLabel.trim()
+                  : diff.to_version_label}
+              </span>
+            </div>
+          )}
+        </div>
+
+        <div style={s.publishBody}>
+          {diffLoading ? (
+            <div style={s.loading}>Computing diff…</div>
+          ) : diffError ? (
+            <div style={s.errorBanner}>{diffError}</div>
+          ) : !diff ? null : (
+            <>
+              {hasSectionChanges && (
+                <CollapsibleBlock
+                  title={`Section changes (${(diff.sections.added?.length || 0) +
+                    (diff.sections.removed?.length || 0) +
+                    (diff.sections.renamed?.length || 0)})`}
+                  open={sectionsOpen}
+                  onToggle={() => setSectionsOpen((v) => !v)}
+                >
+                  <div style={s.diffSectionBlock}>
+                    {(diff.sections.added || []).map((sx, i) => (
+                      <div key={`sa-${i}`} style={s.diffSectionRow}>
+                        <span className="badge" style={s.diffBadgeAdded}>Added</span>
+                        <span style={s.diffSectionTitle}>{sx.title}</span>
+                        {sx.is_ai_addendum && (
+                          <span className="badge" style={s.otherBadge}>AI Addendum</span>
+                        )}
+                      </div>
+                    ))}
+                    {(diff.sections.removed || []).map((sx, i) => (
+                      <div key={`sr-${i}`} style={s.diffSectionRow}>
+                        <span className="badge" style={s.diffBadgeRemoved}>Removed</span>
+                        <span style={s.diffSectionTitle}>{sx.title}</span>
+                      </div>
+                    ))}
+                    {(diff.sections.renamed || []).map((sx, i) => (
+                      <div key={`sn-${i}`} style={s.diffSectionRow}>
+                        <span className="badge" style={s.diffBadgeEdited}>Renamed</span>
+                        <span style={s.diffSectionTitle}>
+                          <span style={s.diffBefore}>{sx.before}</span>
+                          <span style={s.diffArrow}> → </span>
+                          <span style={s.diffAfter}>{sx.after}</span>
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </CollapsibleBlock>
+              )}
+
+              <CollapsibleBlock
+                title={`Added questions (${questionsAdded.length})`}
+                open={addedOpen}
+                onToggle={() => setAddedOpen((v) => !v)}
+                empty={questionsAdded.length === 0}
+              >
+                {questionsAdded.map((q) => (
+                  <div key={q.question_key} style={s.diffQuestionCard}>
+                    <div style={s.diffQuestionMeta}>
+                      <span className="badge" style={s.diffBadgeAdded}>Added</span>
+                      <span style={s.diffSectionPath}>{q.section_title}</span>
+                      <span className="badge" style={s.typeBadge}>
+                        {RESPONSE_TYPE_LABELS[q.response_type] || q.response_type}
+                      </span>
+                      <span
+                        className="badge"
+                        style={q.is_required ? s.requiredBadge : s.optionalBadge}
+                      >
+                        {q.is_required ? 'Required' : 'Optional'}
+                      </span>
+                    </div>
+                    <div style={s.diffQuestionText}>{q.question_text}</div>
+                  </div>
+                ))}
+              </CollapsibleBlock>
+
+              <CollapsibleBlock
+                title={`Removed questions (${questionsRemoved.length})`}
+                open={removedOpen}
+                onToggle={() => setRemovedOpen((v) => !v)}
+                empty={questionsRemoved.length === 0}
+              >
+                {questionsRemoved.map((q) => (
+                  <div key={q.question_key} style={s.diffQuestionCard}>
+                    <div style={s.diffQuestionMeta}>
+                      <span className="badge" style={s.diffBadgeRemoved}>Removed</span>
+                      <span style={s.diffSectionPath}>{q.section_title}</span>
+                    </div>
+                    <div style={s.diffQuestionText}>{q.question_text}</div>
+                  </div>
+                ))}
+              </CollapsibleBlock>
+
+              <CollapsibleBlock
+                title={`Edited questions (${questionsEdited.length})`}
+                open={editedOpen}
+                onToggle={() => setEditedOpen((v) => !v)}
+                empty={questionsEdited.length === 0}
+              >
+                {questionsEdited.map((q) => (
+                  <EditedQuestionRow key={q.question_key} entry={q} />
+                ))}
+              </CollapsibleBlock>
+
+              <div style={s.diffUnchangedLine}>
+                {unchangedCount} unchanged question
+                {unchangedCount === 1 ? '' : 's'}.
+              </div>
+
+              {diff.has_non_sequential_numbers && (
+                <div style={s.publishInfoBanner}>
+                  Note: question numbers will be renumbered sequentially on publish.
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        <div style={s.publishForm}>
+          <div style={s.fieldBlock}>
+            <label style={s.fieldLabel}>
+              Changelog <span style={s.fieldRequired}>*</span>
+            </label>
+            <textarea
+              className="input"
+              style={s.textarea}
+              placeholder="Describe what changed in this version (min 20 characters)"
+              value={changelog}
+              onChange={(e) => onChangeChangelog(e.target.value)}
+              disabled={submitting}
+            />
+            <div
+              style={{
+                ...s.charCounter,
+                color: changelogValid
+                  ? 'var(--text-muted)'
+                  : 'var(--risk-high)',
+              }}
+            >
+              {charCount}/20 characters minimum
+            </div>
+          </div>
+
+          <div style={s.fieldBlock}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input
+                type="checkbox"
+                checked={overrideEnabled}
+                onChange={(e) => onToggleOverride(e.target.checked)}
+                disabled={submitting}
+              />
+              <span style={s.overrideLabel}>Override version label</span>
+            </label>
+            {overrideEnabled && (
+              <input
+                className="input"
+                style={{ marginTop: 6 }}
+                placeholder="e.g. v2.0"
+                value={overrideLabel}
+                onChange={(e) => onChangeOverrideLabel(e.target.value)}
+                disabled={submitting}
+              />
+            )}
+          </div>
+
+          <div style={s.fieldBlock}>
+            <label style={s.fieldLabel}>
+              Admin password <span style={s.fieldRequired}>*</span>
+            </label>
+            <input
+              className="input"
+              type="password"
+              value={password}
+              onChange={(e) => onChangePassword(e.target.value)}
+              disabled={submitting}
+              autoComplete="current-password"
+            />
+          </div>
+
+          {error && <div style={s.saveErrorText}>{error}</div>}
+        </div>
+
+        <div style={s.modalActions}>
+          <button
+            className="btn btn-secondary"
+            onClick={onCancel}
+            disabled={submitting}
+          >
+            Cancel
+          </button>
+          <button
+            className="btn btn-primary"
+            onClick={onSubmit}
+            disabled={!canSubmit}
+          >
+            {submitting ? 'Publishing…' : 'Publish'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function CollapsibleBlock({ title, open, onToggle, empty, children }) {
+  return (
+    <div style={s.diffBlock}>
+      <button
+        style={s.diffBlockHeader}
+        onClick={onToggle}
+        aria-expanded={open}
+      >
+        <span style={s.diffBlockChevron}>{open ? '▾' : '▸'}</span>
+        <span>{title}</span>
+      </button>
+      {open && (
+        <div style={s.diffBlockBody}>
+          {empty ? <div style={s.diffBlockEmpty}>None.</div> : children}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function EditedQuestionRow({ entry }) {
+  const before = entry.before || {}
+  const after = entry.after || {}
+  const changedFields = []
+  if (before.text !== after.text) changedFields.push('text')
+  if (before.response_type !== after.response_type) changedFields.push('type')
+  if (before.is_required !== after.is_required) changedFields.push('required')
+  if (before.allows_other !== after.allows_other) changedFields.push('allows other')
+  if ((before.hint_text || '') !== (after.hint_text || '')) changedFields.push('hint')
+  const beforeOpts = (before.options || []).join('¦')
+  const afterOpts = (after.options || []).join('¦')
+  if (beforeOpts !== afterOpts) changedFields.push('options')
+
+  return (
+    <div style={s.diffQuestionCard}>
+      <div style={s.diffQuestionMeta}>
+        <span className="badge" style={s.diffBadgeEdited}>Edited</span>
+        <span style={s.diffSectionPath}>{entry.section_title}</span>
+        {changedFields.length > 0 && (
+          <span style={s.diffChangedFields}>
+            changed: {changedFields.join(', ')}
+          </span>
+        )}
+      </div>
+      <div style={s.diffBeforeAfter}>
+        <div style={s.diffBeforeCol}>
+          <div style={s.diffColLabel}>Before</div>
+          <QuestionSnapshotView snap={before} />
+        </div>
+        <div style={s.diffAfterCol}>
+          <div style={s.diffColLabel}>After</div>
+          <QuestionSnapshotView snap={after} />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function QuestionSnapshotView({ snap }) {
+  return (
+    <div style={s.snapshotBox}>
+      <div style={s.snapshotText}>{snap.text}</div>
+      <div style={s.snapshotMeta}>
+        <span className="badge" style={s.typeBadge}>
+          {RESPONSE_TYPE_LABELS[snap.response_type] || snap.response_type}
+        </span>
+        <span
+          className="badge"
+          style={snap.is_required ? s.requiredBadge : s.optionalBadge}
+        >
+          {snap.is_required ? 'Required' : 'Optional'}
+        </span>
+        {snap.allows_other && (
+          <span className="badge" style={s.otherBadge}>Allows "Other"</span>
+        )}
+      </div>
+      {snap.hint_text && (
+        <div style={s.snapshotHint}>Hint: {snap.hint_text}</div>
+      )}
+      {(snap.options || []).length > 0 && (
+        <ul style={s.snapshotOptions}>
+          {snap.options.map((o, i) => (
+            <li key={i}>{o}</li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+// ─── Discard modal ─────────────────────────────────────────────────────────
+
+function DiscardModal({
+  currentVersionLabel,
+  text,
+  onChangeText,
+  submitting,
+  error,
+  onCancel,
+  onConfirm,
+}) {
+  const cancelRef = useRef(null)
+  useEffect(() => {
+    cancelRef.current?.focus()
+  }, [])
+
+  const match = text === 'DISCARD'
+
+  return (
+    <div style={s.modalOverlay} onClick={onCancel}>
+      <div
+        className="card"
+        style={s.modalCard}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h3 style={s.modalTitle}>Discard all draft changes?</h3>
+        <div style={s.modalBody}>
+          This will permanently delete every change made to the draft and
+          restart from the current published version ({currentVersionLabel}).
+          This cannot be undone.
+        </div>
+        <input
+          className="input"
+          placeholder="Type DISCARD to confirm"
+          value={text}
+          onChange={(e) => onChangeText(e.target.value)}
+          disabled={submitting}
+        />
+        {error && <div style={s.saveErrorText}>{error}</div>}
+        <div style={s.modalActions}>
+          <button
+            ref={cancelRef}
+            className="btn btn-secondary"
+            onClick={onCancel}
+            disabled={submitting}
+          >
+            Cancel
+          </button>
+          <button
+            className="btn"
+            style={{
+              ...s.destructiveBtn,
+              ...(match && !submitting ? {} : s.destructiveBtnDisabled),
+            }}
+            onClick={onConfirm}
+            disabled={!match || submitting}
+          >
+            {submitting ? 'Discarding…' : 'Discard draft'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Version history panel ─────────────────────────────────────────────────
+
+function VersionHistoryPanel({ versions, open, onToggle }) {
+  const published = useMemo(
+    () =>
+      (versions || [])
+        .filter((v) => !v.is_draft)
+        .slice()
+        .sort((a, b) => {
+          const ad = a.published_at ? new Date(a.published_at).getTime() : 0
+          const bd = b.published_at ? new Date(b.published_at).getTime() : 0
+          return bd - ad
+        }),
+    [versions]
+  )
+
+  return (
+    <div style={s.metaSection}>
+      <button
+        style={s.versionsToggle}
+        onClick={onToggle}
+        aria-expanded={open}
+      >
+        <span style={s.metaLabel}>VERSION HISTORY</span>
+        <span style={s.diffBlockChevron}>{open ? '▾' : '▸'}</span>
+      </button>
+      {open && (
+        <div style={s.versionList}>
+          {published.length === 0 ? (
+            <div style={s.emptyHint}>No published versions yet.</div>
+          ) : (
+            published.map((v) => <VersionRow key={v.id} version={v} />)
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function VersionRow({ version }) {
+  const [expanded, setExpanded] = useState(false)
+  const changelog = version.changelog || ''
+  const truncated = changelog.length > 100
+  const displayed = !expanded && truncated ? `${changelog.slice(0, 100)}…` : changelog
+
+  return (
+    <div style={s.versionRow}>
+      <div style={s.versionRowHeader}>
+        <span style={s.versionLabelMono}>{version.version_label}</span>
+        {version.is_current && (
+          <span className="badge" style={s.currentBadge}>current</span>
+        )}
+        <span style={s.versionDate}>
+          {version.published_at ? formatTimestamp(version.published_at) : '—'}
+        </span>
+      </div>
+      {changelog && (
+        <div
+          style={{
+            ...s.versionChangelog,
+            cursor: truncated ? 'pointer' : 'default',
+          }}
+          onClick={() => truncated && setExpanded((v) => !v)}
+          title={truncated ? 'Click to toggle' : undefined}
+        >
+          {displayed}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function Toast({ message, onDismiss }) {
   useEffect(() => {
     const t = setTimeout(onDismiss, 3500)
@@ -1722,5 +2424,236 @@ const s = {
     background: 'transparent', border: 'none', cursor: 'pointer',
     fontSize: 'var(--text-md)', color: 'var(--text-muted)',
     padding: 0, lineHeight: 1,
+  },
+
+  // Publish modal
+  publishModalCard: {
+    width: 'min(860px, 94vw)',
+    maxHeight: '90vh',
+    display: 'flex', flexDirection: 'column',
+    padding: 0,
+    overflow: 'hidden',
+  },
+  publishHeader: {
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    padding: '16px 20px 12px',
+    borderBottom: '1px solid var(--border)',
+  },
+  publishVersionStrip: {
+    display: 'flex', alignItems: 'center', gap: 8,
+    fontFamily: 'Geist Mono, monospace',
+    fontSize: 'var(--text-sm)',
+  },
+  publishVersionFrom: { color: 'var(--text-muted)' },
+  publishVersionArrow: { color: 'var(--text-muted)' },
+  publishVersionTo: { color: 'var(--accent)', fontWeight: 600 },
+  publishBody: {
+    padding: '12px 20px',
+    overflow: 'auto',
+    flex: 1,
+    display: 'flex', flexDirection: 'column', gap: 10,
+  },
+  publishForm: {
+    padding: '12px 20px',
+    borderTop: '1px solid var(--border)',
+    background: 'var(--bg-subtle)',
+    display: 'flex', flexDirection: 'column', gap: 12,
+  },
+  publishInfoBanner: {
+    padding: '8px 12px',
+    background: 'var(--blue-subtle)',
+    border: '1px solid color-mix(in srgb, var(--blue) 30%, transparent)',
+    borderRadius: 'var(--radius-sm)',
+    fontSize: 'var(--text-xs)',
+    color: 'var(--blue)',
+  },
+  charCounter: {
+    fontSize: 'var(--text-xs)', marginTop: 4,
+  },
+  overrideLabel: {
+    fontSize: 'var(--text-sm)', color: 'var(--text-secondary)',
+  },
+  fieldRequired: { color: 'var(--risk-high)' },
+
+  diffBlock: {
+    border: '1px solid var(--border)',
+    borderRadius: 'var(--radius-sm)',
+    background: 'var(--bg-surface)',
+    overflow: 'hidden',
+  },
+  diffBlockHeader: {
+    display: 'flex', alignItems: 'center', gap: 8,
+    width: '100%',
+    padding: '8px 12px',
+    background: 'var(--bg-subtle)',
+    border: 'none',
+    borderBottom: '1px solid var(--border)',
+    cursor: 'pointer',
+    fontSize: 'var(--text-sm)',
+    fontWeight: 500,
+    color: 'var(--text-primary)',
+    textAlign: 'left',
+  },
+  diffBlockChevron: {
+    fontSize: 'var(--text-xs)', color: 'var(--text-muted)',
+    width: 12, display: 'inline-block',
+  },
+  diffBlockBody: {
+    padding: 12,
+    display: 'flex', flexDirection: 'column', gap: 8,
+  },
+  diffBlockEmpty: {
+    fontSize: 'var(--text-xs)', color: 'var(--text-muted)',
+    fontStyle: 'italic',
+  },
+  diffSectionBlock: {
+    display: 'flex', flexDirection: 'column', gap: 6,
+  },
+  diffSectionRow: {
+    display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+    fontSize: 'var(--text-sm)',
+  },
+  diffSectionTitle: {
+    fontSize: 'var(--text-sm)', color: 'var(--text-primary)',
+  },
+  diffBefore: { color: 'var(--text-muted)', textDecoration: 'line-through' },
+  diffAfter: { color: 'var(--text-primary)', fontWeight: 500 },
+  diffArrow: { color: 'var(--text-muted)', margin: '0 4px' },
+  diffBadgeAdded: {
+    background: 'color-mix(in srgb, var(--risk-low) 20%, transparent)',
+    color: 'var(--risk-low)',
+  },
+  diffBadgeRemoved: {
+    background: 'color-mix(in srgb, var(--risk-high) 18%, transparent)',
+    color: 'var(--risk-high)',
+  },
+  diffBadgeEdited: {
+    background: 'color-mix(in srgb, var(--status-risk-pending) 18%, transparent)',
+    color: 'var(--status-risk-pending)',
+  },
+  diffQuestionCard: {
+    border: '1px solid var(--border)',
+    borderRadius: 'var(--radius-sm)',
+    padding: 10,
+    display: 'flex', flexDirection: 'column', gap: 6,
+    background: 'var(--bg-surface)',
+  },
+  diffQuestionMeta: {
+    display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+  },
+  diffSectionPath: {
+    fontSize: 'var(--text-xs)', color: 'var(--text-muted)',
+    letterSpacing: '0.02em',
+  },
+  diffQuestionText: {
+    fontSize: 'var(--text-sm)', color: 'var(--text-primary)',
+    lineHeight: 1.5,
+  },
+  diffChangedFields: {
+    fontSize: 'var(--text-xs)', color: 'var(--text-muted)',
+    fontStyle: 'italic',
+  },
+  diffBeforeAfter: {
+    display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8,
+  },
+  diffBeforeCol: {
+    display: 'flex', flexDirection: 'column', gap: 4,
+    minWidth: 0,
+  },
+  diffAfterCol: {
+    display: 'flex', flexDirection: 'column', gap: 4,
+    minWidth: 0,
+  },
+  diffColLabel: {
+    fontSize: 'var(--text-xs)', fontWeight: 500,
+    color: 'var(--text-muted)',
+    textTransform: 'uppercase', letterSpacing: '0.04em',
+  },
+  snapshotBox: {
+    padding: 8,
+    background: 'var(--bg-subtle)',
+    border: '1px solid var(--border)',
+    borderRadius: 'var(--radius-sm)',
+    display: 'flex', flexDirection: 'column', gap: 6,
+    minWidth: 0,
+  },
+  snapshotText: {
+    fontSize: 'var(--text-sm)',
+    color: 'var(--text-primary)',
+    lineHeight: 1.45,
+    whiteSpace: 'pre-wrap',
+    wordBreak: 'break-word',
+  },
+  snapshotMeta: {
+    display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap',
+  },
+  snapshotHint: {
+    fontSize: 'var(--text-xs)', color: 'var(--text-muted)',
+    fontStyle: 'italic',
+  },
+  snapshotOptions: {
+    margin: 0, paddingLeft: 18,
+    fontSize: 'var(--text-xs)', color: 'var(--text-secondary)',
+    lineHeight: 1.6,
+  },
+  diffUnchangedLine: {
+    fontSize: 'var(--text-xs)', color: 'var(--text-muted)',
+    padding: '4px 2px',
+  },
+
+  // Discard modal
+  destructiveBtn: {
+    background: 'var(--risk-high)',
+    color: 'white',
+    border: '1px solid var(--risk-high)',
+  },
+  destructiveBtnDisabled: {
+    opacity: 0.4,
+    cursor: 'not-allowed',
+  },
+
+  // Version history
+  versionsToggle: {
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    width: '100%',
+    background: 'transparent',
+    border: 'none',
+    padding: 0,
+    cursor: 'pointer',
+    color: 'var(--text-muted)',
+  },
+  versionList: {
+    marginTop: 8,
+    display: 'flex', flexDirection: 'column', gap: 8,
+    maxHeight: 320, overflowY: 'auto',
+  },
+  versionRow: {
+    padding: '8px 10px',
+    background: 'var(--bg-subtle)',
+    border: '1px solid var(--border)',
+    borderRadius: 'var(--radius-sm)',
+    display: 'flex', flexDirection: 'column', gap: 4,
+  },
+  versionRowHeader: {
+    display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+  },
+  versionLabelMono: {
+    fontFamily: 'Geist Mono, monospace',
+    fontSize: 'var(--text-sm)',
+    fontWeight: 600,
+    color: 'var(--accent)',
+  },
+  currentBadge: {
+    background: 'color-mix(in srgb, var(--status-closed) 20%, transparent)',
+    color: 'var(--status-closed)',
+  },
+  versionDate: {
+    fontSize: 'var(--text-xs)', color: 'var(--text-muted)',
+    marginLeft: 'auto',
+  },
+  versionChangelog: {
+    fontSize: 'var(--text-xs)', color: 'var(--text-secondary)',
+    lineHeight: 1.5,
+    wordBreak: 'break-word',
   },
 }

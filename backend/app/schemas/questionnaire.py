@@ -128,3 +128,96 @@ class SaveDraftResponse(BaseModel):
     draft: QuestionnaireVersionDetail
     summary: SaveDraftSummary
     warnings: list[str] = []
+
+
+# ---------------------------------------------------------------------------
+# Diff (Phase Q4)
+# ---------------------------------------------------------------------------
+
+
+class DiffSectionAdded(BaseModel):
+    title: str
+    is_ai_addendum: bool
+
+
+class DiffSectionRemoved(BaseModel):
+    title: str
+
+
+class DiffSectionRenamed(BaseModel):
+    before: str
+    after: str
+
+
+class DiffSections(BaseModel):
+    added: list[DiffSectionAdded] = []
+    removed: list[DiffSectionRemoved] = []
+    renamed: list[DiffSectionRenamed] = []
+
+
+class DiffQuestionAdded(BaseModel):
+    question_key: str
+    question_text: str
+    section_title: str
+    response_type: ResponseType
+    is_required: bool
+
+
+class DiffQuestionRemoved(BaseModel):
+    question_key: str
+    question_text: str
+    section_title: str
+
+
+class DiffQuestionSnapshot(BaseModel):
+    text: str
+    response_type: ResponseType
+    is_required: bool
+    allows_other: bool
+    hint_text: Optional[str] = None
+    options: list[str] = []
+
+
+class DiffQuestionEdited(BaseModel):
+    question_key: str
+    section_title: str
+    before: DiffQuestionSnapshot
+    after: DiffQuestionSnapshot
+
+
+class DiffQuestions(BaseModel):
+    added: list[DiffQuestionAdded] = []
+    removed: list[DiffQuestionRemoved] = []
+    edited: list[DiffQuestionEdited] = []
+    unchanged_count: int = 0
+
+
+class DraftDiff(BaseModel):
+    from_version_label: Optional[str] = None
+    to_version_label: str
+    sections: DiffSections
+    questions: DiffQuestions
+    has_non_sequential_numbers: bool = False
+
+
+# ---------------------------------------------------------------------------
+# Publish / Discard (Phase Q4)
+# ---------------------------------------------------------------------------
+
+
+VERSION_LABEL_REGEX = r"^v\d+\.\d+$"
+
+
+class PublishDraftBody(BaseModel):
+    changelog: str
+    password: str
+    version_label: Optional[str] = Field(default=None, pattern=VERSION_LABEL_REGEX)
+
+
+class PublishDraftResponse(BaseModel):
+    new_version: QuestionnaireVersionDetail
+    new_draft: QuestionnaireVersionDetail
+
+
+class DiscardDraftResponse(BaseModel):
+    draft: QuestionnaireVersionDetail

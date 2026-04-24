@@ -8,14 +8,17 @@ were removed so the two code paths cannot drift.
 """
 from __future__ import annotations
 
+import re
 import secrets
 import uuid
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.config import settings
 from app.database import get_db
 from app.models.audit_log import ActorType
 from app.models.question import Question, ResponseType
@@ -23,15 +26,25 @@ from app.models.question_option import QuestionOption
 from app.models.questionnaire_section import QuestionnaireSection
 from app.models.questionnaire_version import QuestionnaireVersion
 from app.schemas.questionnaire import (
+    DiscardDraftResponse,
+    DraftDiff,
+    PublishDraftBody,
+    PublishDraftResponse,
     QuestionnaireVersionDetail,
     QuestionnaireVersionSummary,
     SaveDraftBody,
     SaveDraftResponse,
     SaveDraftSummary,
+    VERSION_LABEL_REGEX,
 )
 from app.services.audit import log_action
-from app.services.auth import get_admin_user
-from app.services.questionnaire import renumber_version
+from app.services.auth import get_admin_user, verify_password
+from app.services.questionnaire import (
+    clone_version_contents,
+    load_version_with_contents,
+    next_minor_version_label,
+    renumber_version,
+)
 from app.utils.sanitize import sanitize_text
 
 router = APIRouter(prefix="/questionnaire", tags=["admin-questionnaire"])
@@ -45,16 +58,7 @@ router = APIRouter(prefix="/questionnaire", tags=["admin-questionnaire"])
 async def _load_version_detail(
     db: AsyncSession, version_id: uuid.UUID
 ) -> QuestionnaireVersion | None:
-    result = await db.execute(
-        select(QuestionnaireVersion)
-        .where(QuestionnaireVersion.id == version_id)
-        .options(
-            selectinload(QuestionnaireVersion.sections)
-            .selectinload(QuestionnaireSection.questions)
-            .selectinload(Question.options)
-        )
-    )
-    return result.scalar_one_or_none()
+    return await load_version_with_contents(db, version_id)
 
 
 async def _get_draft_id(db: AsyncSession) -> uuid.UUID:
@@ -518,3 +522,398 @@ async def renumber_draft(
     )
 
     return {"ok": True, "changed_count": changed_count}
+
+
+# ---------------------------------------------------------------------------
+# Diff / Publish / Discard (Phase Q4)
+# ---------------------------------------------------------------------------
+
+
+def _question_snapshot(q: Question) -> dict:
+    return {
+        "text": q.question_text,
+        "response_type": q.response_type,
+        "is_required": q.is_required,
+        "allows_other": q.allows_other,
+        "hint_text": q.hint_text,
+        "options": [o.label for o in sorted(q.options, key=lambda o: o.order)],
+    }
+
+
+def _compute_diff(
+    draft: QuestionnaireVersion,
+    current: QuestionnaireVersion | None,
+) -> dict:
+    draft_sections = sorted(draft.sections, key=lambda s: s.order)
+    pub_sections = (
+        sorted(current.sections, key=lambda s: s.order) if current else []
+    )
+
+    # --- Section diff: match by title first, then by question_key overlap ---
+    draft_titles = {s.title for s in draft_sections}
+    pub_titles = {s.title for s in pub_sections}
+
+    draft_unmatched = [s for s in draft_sections if s.title not in pub_titles]
+    pub_unmatched = [s for s in pub_sections if s.title not in draft_titles]
+
+    renamed: list[dict] = []
+    used_pub_ids: set[uuid.UUID] = set()
+    used_draft_ids: set[uuid.UUID] = set()
+
+    for ds in draft_unmatched:
+        ds_keys = {q.question_key for q in ds.questions}
+        if not ds_keys:
+            continue
+        best = None
+        best_overlap = 0
+        for ps in pub_unmatched:
+            if ps.id in used_pub_ids:
+                continue
+            ps_keys = {q.question_key for q in ps.questions}
+            overlap = len(ds_keys & ps_keys)
+            if overlap > best_overlap:
+                best = ps
+                best_overlap = overlap
+        if best is not None and best_overlap >= 1:
+            renamed.append({"before": best.title, "after": ds.title})
+            used_pub_ids.add(best.id)
+            used_draft_ids.add(ds.id)
+
+    added_sections = [
+        {"title": s.title, "is_ai_addendum": s.is_ai_addendum}
+        for s in draft_unmatched
+        if s.id not in used_draft_ids
+    ]
+    removed_sections = [
+        {"title": s.title} for s in pub_unmatched if s.id not in used_pub_ids
+    ]
+
+    # --- Question diff: match by question_key ---
+    draft_q: dict[str, tuple[QuestionnaireSection, Question]] = {}
+    for s in draft_sections:
+        for q in s.questions:
+            draft_q[q.question_key] = (s, q)
+    pub_q: dict[str, tuple[QuestionnaireSection, Question]] = {}
+    for s in pub_sections:
+        for q in s.questions:
+            pub_q[q.question_key] = (s, q)
+
+    added_questions: list[dict] = []
+    removed_questions: list[dict] = []
+    edited_questions: list[dict] = []
+    unchanged_count = 0
+
+    for key, (ds, dq) in draft_q.items():
+        if key not in pub_q:
+            added_questions.append(
+                {
+                    "question_key": key,
+                    "question_text": dq.question_text,
+                    "section_title": ds.title,
+                    "response_type": dq.response_type,
+                    "is_required": dq.is_required,
+                }
+            )
+        else:
+            ps, pq = pub_q[key]
+            before = _question_snapshot(pq)
+            after = _question_snapshot(dq)
+            if before == after:
+                unchanged_count += 1
+            else:
+                edited_questions.append(
+                    {
+                        "question_key": key,
+                        "section_title": ds.title,
+                        "before": before,
+                        "after": after,
+                    }
+                )
+
+    for key, (ps, pq) in pub_q.items():
+        if key not in draft_q:
+            removed_questions.append(
+                {
+                    "question_key": key,
+                    "question_text": pq.question_text,
+                    "section_title": ps.title,
+                }
+            )
+
+    # --- Non-sequential question-number detection ---
+    all_numbers = [q.question_number for s in draft_sections for q in s.questions]
+    has_non_sequential = bool(all_numbers) and sorted(all_numbers) != list(
+        range(1, len(all_numbers) + 1)
+    )
+
+    current_label = current.version_label if current else None
+    next_label = (
+        next_minor_version_label(current_label) if current_label else "v1.0"
+    )
+
+    return {
+        "from_version_label": current_label,
+        "to_version_label": next_label,
+        "sections": {
+            "added": added_sections,
+            "removed": removed_sections,
+            "renamed": renamed,
+        },
+        "questions": {
+            "added": added_questions,
+            "removed": removed_questions,
+            "edited": edited_questions,
+            "unchanged_count": unchanged_count,
+        },
+        "has_non_sequential_numbers": has_non_sequential,
+    }
+
+
+async def _get_current_version(db: AsyncSession) -> QuestionnaireVersion | None:
+    result = await db.execute(
+        select(QuestionnaireVersion).where(
+            QuestionnaireVersion.is_current.is_(True)
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+@router.get("/draft/diff", response_model=DraftDiff)
+async def get_draft_diff(
+    admin: str = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+) -> DraftDiff:
+    draft_id = await _get_draft_id(db)
+    draft = await _load_version_detail(db, draft_id)
+    if draft is None:
+        raise HTTPException(status_code=404, detail="Draft questionnaire version not found")
+
+    current_row = await _get_current_version(db)
+    current = (
+        await _load_version_detail(db, current_row.id) if current_row else None
+    )
+
+    payload = _compute_diff(draft, current)
+    return DraftDiff.model_validate(payload)
+
+
+def _diff_summary(payload: dict) -> dict:
+    return {
+        "sections_added": len(payload["sections"]["added"]),
+        "sections_removed": len(payload["sections"]["removed"]),
+        "sections_renamed": len(payload["sections"]["renamed"]),
+        "questions_added": len(payload["questions"]["added"]),
+        "questions_removed": len(payload["questions"]["removed"]),
+        "questions_edited": len(payload["questions"]["edited"]),
+        "unchanged_count": payload["questions"]["unchanged_count"],
+    }
+
+
+@router.post("/draft/publish", response_model=PublishDraftResponse)
+async def publish_draft(
+    body: PublishDraftBody,
+    admin: str = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+) -> PublishDraftResponse:
+    changelog = body.changelog.strip()
+    if len(changelog) < 20:
+        raise HTTPException(
+            status_code=400,
+            detail="Changelog must be at least 20 characters",
+        )
+
+    if not settings.admin_password_hash or not verify_password(
+        body.password, settings.admin_password_hash
+    ):
+        # Generic 403 — do not leak which credential failed.
+        raise HTTPException(status_code=403, detail="Incorrect password")
+
+    # --- Resolve version label ---------------------------------------------
+    current_row = await _get_current_version(db)
+    draft_id = await _get_draft_id(db)
+
+    async def _label_collides(candidate: str) -> bool:
+        """True if any version OTHER than the draft already uses this label."""
+        res = await db.execute(
+            select(QuestionnaireVersion.id).where(
+                QuestionnaireVersion.version_label == candidate,
+                QuestionnaireVersion.id != draft_id,
+            )
+        )
+        return res.scalar_one_or_none() is not None
+
+    if body.version_label is not None:
+        candidate = body.version_label.strip()
+        if not re.match(VERSION_LABEL_REGEX, candidate):
+            raise HTTPException(
+                status_code=400,
+                detail="Version label must match pattern vMAJOR.MINOR (e.g. v2.0)",
+            )
+        if await _label_collides(candidate):
+            raise HTTPException(
+                status_code=400, detail="Version label already exists"
+            )
+        new_label = candidate
+    elif current_row is not None:
+        new_label = next_minor_version_label(current_row.version_label)
+        # Guard against collision with an archived version that already took
+        # the computed minor bump (unlikely, but possible after manual overrides).
+        if await _label_collides(new_label):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Auto-incremented label {new_label!r} already exists — "
+                    "please override the version label."
+                ),
+            )
+    else:
+        new_label = "v1.0"
+
+    # --- Load draft + capture diff for audit metadata ----------------------
+    draft = await _load_version_detail(db, draft_id)
+    if draft is None:
+        raise HTTPException(status_code=404, detail="Draft questionnaire version not found")
+
+    current = (
+        await _load_version_detail(db, current_row.id) if current_row else None
+    )
+    diff_payload = _compute_diff(draft, current)
+    summary = _diff_summary(diff_payload)
+
+    from_version_label = current_row.version_label if current_row else None
+
+    # --- Publish transaction -----------------------------------------------
+    # get_db() wraps the whole request in a transaction; if any step below
+    # raises, the session rolls back and nothing is committed.
+
+    # 1. Renumber the draft in place.
+    await renumber_version(db, draft_id)
+
+    # 2. Flip old current's flag OFF *before* promoting the draft so the
+    #    partial unique index `only_one_current` isn't transiently violated.
+    if current_row is not None:
+        current_row.is_current = False
+        await db.flush()
+
+    # 3. Promote the draft: clear is_draft, set is_current, metadata.
+    draft.is_draft = False
+    draft.is_current = True
+    draft.published_at = datetime.now(timezone.utc)
+    draft.changelog = changelog
+    draft.version_label = new_label
+    await db.flush()
+
+    # 4. Create a fresh draft cloned from the just-published version. The
+    #    draft's label previews the *next* auto-incremented version; the
+    #    admin can still override at the next publish.
+    new_draft_label = next_minor_version_label(new_label)
+    # Ensure uniqueness in case an archived version already uses that label.
+    probe_label = new_draft_label
+    suffix = 1
+    while True:
+        existing = await db.execute(
+            select(QuestionnaireVersion.id).where(
+                QuestionnaireVersion.version_label == probe_label
+            )
+        )
+        if existing.scalar_one_or_none() is None:
+            break
+        suffix += 1
+        probe_label = f"{new_draft_label}-{suffix}"
+    new_draft = QuestionnaireVersion(
+        version_label=probe_label,
+        is_current=False,
+        is_draft=True,
+        published_at=None,
+        changelog=None,
+    )
+    db.add(new_draft)
+    await db.flush()
+
+    await clone_version_contents(db, draft_id, new_draft.id)
+
+    # 5. Audit log.
+    await log_action(
+        db,
+        actor=admin,
+        actor_type=ActorType.ADMIN,
+        action="questionnaire.published",
+        description=(
+            f"Published questionnaire {new_label} "
+            f"(was {from_version_label or 'none'})"
+        ),
+        metadata={
+            "from_version": from_version_label,
+            "to_version": new_label,
+            "changelog": changelog,
+            "diff_summary": summary,
+        },
+    )
+
+    # 6. Load canonical state for response.
+    published_reloaded = await _load_version_detail(db, draft_id)
+    new_draft_reloaded = await _load_version_detail(db, new_draft.id)
+    assert published_reloaded is not None and new_draft_reloaded is not None
+
+    return PublishDraftResponse(
+        new_version=QuestionnaireVersionDetail.model_validate(
+            _serialize_version(published_reloaded)
+        ),
+        new_draft=QuestionnaireVersionDetail.model_validate(
+            _serialize_version(new_draft_reloaded)
+        ),
+    )
+
+
+@router.post("/draft/discard", response_model=DiscardDraftResponse)
+async def discard_draft(
+    admin: str = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+) -> DiscardDraftResponse:
+    draft_id = await _get_draft_id(db)
+    draft = await _load_version_detail(db, draft_id)
+    if draft is None:
+        raise HTTPException(status_code=404, detail="Draft questionnaire version not found")
+
+    current_row = await _get_current_version(db)
+    if current_row is None:
+        raise HTTPException(
+            status_code=400,
+            detail="No published version exists to restore the draft from",
+        )
+
+    destroyed_section_count = len(draft.sections)
+    destroyed_question_count = sum(len(s.questions) for s in draft.sections)
+
+    # Delete all sections (cascade takes out questions + options).
+    for section in list(draft.sections):
+        await db.delete(section)
+    await db.flush()
+
+    # Re-clone from the current published version.
+    await clone_version_contents(db, current_row.id, draft_id)
+
+    await log_action(
+        db,
+        actor=admin,
+        actor_type=ActorType.ADMIN,
+        action="questionnaire.draft.discarded",
+        description=(
+            f"Draft discarded and restored from {current_row.version_label} "
+            f"({destroyed_question_count} questions across "
+            f"{destroyed_section_count} sections wiped)"
+        ),
+        metadata={
+            "restored_from_version_label": current_row.version_label,
+            "destroyed_section_count": destroyed_section_count,
+            "destroyed_question_count": destroyed_question_count,
+        },
+    )
+
+    refreshed = await _load_version_detail(db, draft_id)
+    assert refreshed is not None
+    return DiscardDraftResponse(
+        draft=QuestionnaireVersionDetail.model_validate(
+            _serialize_version(refreshed)
+        )
+    )
