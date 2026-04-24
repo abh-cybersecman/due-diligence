@@ -187,8 +187,14 @@ export default function Dashboard() {
                     onClick={() => navigate(`/admin/engagements/${eng.id}`)}
                   >
                     <td style={s.td}>
-                      <span style={s.docNum}>{eng.doc_number}</span>
-                      {eng.is_ai_application && <span style={s.aiBadge}>AI</span>}
+                      <div style={s.docCell}>
+                        <span style={s.docNum}>{eng.doc_number}</span>
+                        {eng.is_ai_application && (
+                          <div style={s.docBadgeRow}>
+                            <span style={s.aiBadge}>AI</span>
+                          </div>
+                        )}
+                      </div>
                     </td>
                     <td style={s.td}>
                       <span style={s.appName}>{eng.application_name}</span>
@@ -276,11 +282,18 @@ const s = {
     borderBottom: '1px solid var(--border)',
     verticalAlign: 'middle',
   },
+  docCell: {
+    display: 'flex', flexDirection: 'column', gap: 4,
+    alignItems: 'flex-start',
+  },
   docNum: {
     fontFamily: "'Geist Mono', monospace",
     fontSize: 'var(--text-xs)',
     color: 'var(--blue)',
-    marginRight: 6,
+    whiteSpace: 'nowrap',
+  },
+  docBadgeRow: {
+    display: 'flex', gap: 6, flexWrap: 'wrap',
   },
   aiBadge: {
     fontSize: 'var(--text-xs)',
