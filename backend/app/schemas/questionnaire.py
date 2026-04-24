@@ -73,79 +73,58 @@ class QuestionnaireVersionDetail(QuestionnaireVersionSummary):
 
 
 # ---------------------------------------------------------------------------
-# Phase Q3 — write request bodies
+# Batched save input (admin editor's single source of truth)
 # ---------------------------------------------------------------------------
 
 
-class SectionCreate(BaseModel):
-    title: str = Field(min_length=1, max_length=255)
-    is_ai_addendum: bool = False
-    order: Optional[int] = None
+class SaveOptionInput(BaseModel):
+    """Option payload in the batched save body.
 
-
-class SectionUpdate(BaseModel):
-    title: Optional[str] = Field(default=None, min_length=1, max_length=255)
-    is_ai_addendum: Optional[bool] = None
-    order: Optional[int] = None
-
-
-class OptionInput(BaseModel):
-    """Draft-editor option input.
-
-    `id` is present for pre-existing options (preserved on PATCH) and absent
-    for newly added ones. Order is taken from the array position; the explicit
-    `order` field is optional and ignored if position differs.
+    `id` is present for pre-existing options (matched in place), absent for
+    newly added ones. Order is taken from array position.
     """
 
     id: Optional[uuid.UUID] = None
     label: str = Field(min_length=1, max_length=500)
 
 
-class QuestionCreate(BaseModel):
-    section_id: uuid.UUID
+class SaveQuestionInput(BaseModel):
+    id: Optional[uuid.UUID] = None
     question_text: str = Field(min_length=1)
     response_type: ResponseType
     is_required: bool = True
     hint_text: Optional[str] = None
     allows_other: bool = False
-    options: list[OptionInput] = []
+    options: list[SaveOptionInput] = []
 
 
-class QuestionUpdate(BaseModel):
-    section_id: Optional[uuid.UUID] = None
-    question_text: Optional[str] = Field(default=None, min_length=1)
-    response_type: Optional[ResponseType] = None
-    is_required: Optional[bool] = None
-    hint_text: Optional[str] = None
-    allows_other: Optional[bool] = None
-    options: Optional[list[OptionInput]] = None
+class SaveSectionInput(BaseModel):
+    id: Optional[uuid.UUID] = None
+    title: str = Field(min_length=1, max_length=255)
+    is_ai_addendum: bool = False
+    questions: list[SaveQuestionInput] = []
 
 
-class OrderItem(BaseModel):
-    id: uuid.UUID
-    order: int
+class SaveDraftBody(BaseModel):
+    sections: list[SaveSectionInput]
 
 
-class ReorderBody(BaseModel):
-    section_orders: Optional[list[OrderItem]] = None
-    question_orders: Optional[dict[uuid.UUID, list[OrderItem]]] = None
+class SaveDraftSummary(BaseModel):
+    sections_created: int = 0
+    sections_edited: int = 0
+    sections_deleted: int = 0
+    questions_created: int = 0
+    questions_edited: int = 0
+    questions_deleted: int = 0
+    options_created: int = 0
+    options_edited: int = 0
+    options_deleted: int = 0
+    question_keys_minted: int = 0
 
 
-# ---------------------------------------------------------------------------
-# Phase Q3 — write responses
-# ---------------------------------------------------------------------------
+class SaveDraftResponse(BaseModel):
+    """Canonical draft state after save, plus a change summary and warnings."""
 
-
-class SectionDeleteResponse(BaseModel):
-    deleted_questions: int
-
-
-class QuestionWriteResponse(BaseModel):
-    """Returned on question create/update.
-
-    `warnings` surfaces server-side side effects the UI should react to —
-    currently the response_type change that forces a new `question_key`.
-    """
-
-    question: QuestionSchema
+    draft: QuestionnaireVersionDetail
+    summary: SaveDraftSummary
     warnings: list[str] = []

@@ -316,13 +316,7 @@ New routes, all under `/api/admin/`:
 GET    /questionnaire/versions                      # list all versions
 GET    /questionnaire/versions/{id}                 # full version: sections + questions + options
 GET    /questionnaire/draft                         # shortcut for the current draft
-POST   /questionnaire/draft/sections                # create section in draft
-PATCH  /questionnaire/draft/sections/{id}           # rename, reorder, toggle ai_addendum
-DELETE /questionnaire/draft/sections/{id}           # delete section (cascade questions)
-POST   /questionnaire/draft/questions               # create question in draft
-PATCH  /questionnaire/draft/questions/{id}          # edit question (text, type, required, options, allows_other, hint)
-DELETE /questionnaire/draft/questions/{id}          # delete question
-POST   /questionnaire/draft/reorder                 # batch reorder { section_orders: [...], question_orders: {...} }
+POST   /questionnaire/draft/save                    # batched save: body is the full draft state; backend reconciles (creates/edits/deletes sections, questions, options) in a single transaction
 POST   /questionnaire/draft/renumber                # reassign question_number = 1..N across the draft
 POST   /questionnaire/draft/publish                 # publish draft → new current version (password required; also renumbers)
 POST   /questionnaire/draft/discard                 # wipe and re-clone from current (yes/no confirm)
@@ -330,6 +324,15 @@ GET    /questionnaire/draft/diff                    # returns diff vs current pu
 GET    /questionnaire/preview                       # public version of draft for preview
 POST   /engagements/{id}/refresh                    # create R1/R2 (password required)
 ```
+
+The admin editor uses a single batched save rather than per-mutation endpoints.
+Every local edit (text, response type, option add/remove/reorder, required /
+allows-other toggles, hint text, section rename, ai-addendum toggle,
+create/delete, drag-reorder of sections and questions) stays client-side until
+the admin clicks **Save draft**. The payload contains the entire draft state;
+the backend diffs it against the DB and applies the minimum set of changes
+atomically. One `questionnaire.draft.saved` audit log entry covers the whole
+batch with a summary of counts per entity type.
 
 Vendor and IR endpoints are **unchanged in path** but their payloads now include version metadata.
 
@@ -363,10 +366,11 @@ This feature is large. Implement in sequence. Each phase must build clean (`dock
 
 ### Phase Q3 — Admin questionnaire editor (write)
 
-- All the `POST/PATCH/DELETE /questionnaire/draft/*` endpoints.
+- Single batched `POST /questionnaire/draft/save` endpoint; no per-mutation endpoints.
 - Editor form fields functional: add/edit/delete sections, questions, options; drag-to-reorder; `allows_other` toggle.
-- Autosave for inline edits (debounced 800ms like vendor autosave).
-- Audit logging on every mutation.
+- All edits live in client React state until the admin clicks **Save draft** (button in the right metadata panel). Cmd/Ctrl+S triggers save. Dirty state surfaces as an "Unsaved changes" chip, a leading bullet in `document.title`, and a `beforeunload` guard.
+- Preview-as-vendor prompts when dirty (save-and-preview vs. preview-last-saved).
+- One `questionnaire.draft.saved` audit log entry per save, with summary counts.
 
 ### Phase Q4 — Publish flow + diff
 

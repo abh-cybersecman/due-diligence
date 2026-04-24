@@ -591,13 +591,7 @@ All routes prefixed with `APP_BASE_PATH`. Group by access tier.
   GET    /questionnaire/versions
   GET    /questionnaire/versions/{id}
   GET    /questionnaire/draft
-  POST   /questionnaire/draft/sections
-  PATCH  /questionnaire/draft/sections/{id}
-  DELETE /questionnaire/draft/sections/{id}
-  POST   /questionnaire/draft/questions
-  PATCH  /questionnaire/draft/questions/{id}
-  DELETE /questionnaire/draft/questions/{id}
-  POST   /questionnaire/draft/reorder
+  POST   /questionnaire/draft/save                     # Batched save: full draft state → reconciled against DB in one transaction
   POST   /questionnaire/draft/renumber                 # Reassign question_number = 1..N across the draft
   POST   /questionnaire/draft/publish                  # Requires password re-confirmation (also renumbers)
   POST   /questionnaire/draft/discard

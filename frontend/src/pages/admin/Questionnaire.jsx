@@ -18,6 +18,8 @@ import {
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 
+const TITLE_BASE = 'Questionnaire editor — ISDD'
+
 function useAdminFetch() {
   const { adminSession } = useAuth()
   return useCallback(
@@ -43,6 +45,12 @@ const RESPONSE_TYPE_LABELS = {
 
 const CHOICE_TYPES = new Set(['SINGLE_CHOICE', 'MULTI_CHOICE'])
 
+function newId() {
+  // Stable, unique client-side key for entities that haven't hit the server.
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID()
+  return `new-${Math.random().toString(36).slice(2)}-${Date.now()}`
+}
+
 function formatTimestamp(iso) {
   if (!iso) return '—'
   const d = new Date(iso)
@@ -50,6 +58,25 @@ function formatTimestamp(iso) {
     year: 'numeric', month: 'short', day: 'numeric',
     hour: '2-digit', minute: '2-digit',
   })
+}
+
+// Server payload → client draft (stamp `_isNew:false` on everything).
+function normalizeDraft(serverDraft) {
+  return {
+    ...serverDraft,
+    sections: (serverDraft.sections || []).map((s) => ({
+      ...s,
+      _isNew: false,
+      questions: (s.questions || []).map((q) => ({
+        ...q,
+        _isNew: false,
+        options: (q.options || []).map((o) => ({
+          ...o,
+          _isNew: false,
+        })),
+      })),
+    })),
+  }
 }
 
 // ─── Small icons ───────────────────────────────────────────────────────────
@@ -98,59 +125,31 @@ export function FileTextIcon({ size = 14 }) {
 export default function Questionnaire() {
   const adminFetch = useAdminFetch()
   const [draft, setDraft] = useState(null)
+  const [dirty, setDirty] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [savedFlash, setSavedFlash] = useState(false)
+  const [saveError, setSaveError] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [tab, setTab] = useState('standard')
   const [activeSectionId, setActiveSectionId] = useState(null)
-  const [saveStatus, setSaveStatus] = useState('idle')
   const [typeChangePrompt, setTypeChangePrompt] = useState(null)
-  const [keyChangeNotice, setKeyChangeNotice] = useState(null)
   const [renumberPrompt, setRenumberPrompt] = useState(false)
   const [renumberNotice, setRenumberNotice] = useState(null)
-  const [dirtyPrompt, setDirtyPrompt] = useState(null)
-  const activeFormRef = useRef(null)
+  const [previewPrompt, setPreviewPrompt] = useState(false)
+  const [warningToast, setWarningToast] = useState(null)
 
-  const registerActiveForm = useCallback((reg) => {
-    activeFormRef.current = reg
-  }, [])
-
-  const guardSwitch = useCallback((proceed) => {
-    const form = activeFormRef.current
-    if (!form || !form.isDirty()) { proceed(); return }
-    setDirtyPrompt({
-      onSave: async () => {
-        try { await form.save() }
-        catch { setDirtyPrompt(null); return }
-        setDirtyPrompt(null)
-        proceed()
-      },
-      onDiscard: () => {
-        form.discard()
-        setDirtyPrompt(null)
-        proceed()
-      },
-      onCancel: () => setDirtyPrompt(null),
-    })
-  }, [])
-
-  // Browser-level unsaved-changes warning.
-  useEffect(() => {
-    function handler(e) {
-      if (activeFormRef.current?.isDirty?.()) {
-        e.preventDefault()
-        e.returnValue = ''
-      }
-    }
-    window.addEventListener('beforeunload', handler)
-    return () => window.removeEventListener('beforeunload', handler)
-  }, [])
+  const dirtyRef = useRef(false)
+  dirtyRef.current = dirty
 
   const loadDraft = useCallback(async () => {
     try {
       const res = await adminFetch('/api/admin/questionnaire/draft')
       if (!res.ok) throw new Error('Failed to load draft questionnaire')
       const data = await res.json()
-      setDraft(data)
+      setDraft(normalizeDraft(data))
+      setDirty(false)
+      setSavedFlash(false)
     } catch (err) {
       setError(err.message)
     } finally {
@@ -162,54 +161,170 @@ export default function Questionnaire() {
     loadDraft()
   }, [loadDraft])
 
-  // Apply a section update locally (no fetch).
-  const applySectionLocal = useCallback((sectionId, patch) => {
-    setDraft((prev) => {
-      if (!prev) return prev
-      return {
-        ...prev,
-        sections: prev.sections.map((s) =>
-          s.id === sectionId ? { ...s, ...patch } : s
-        ),
-      }
-    })
+  // Any local mutation flows through this — sets the draft and marks dirty.
+  const mutate = useCallback((producer) => {
+    setDraft((prev) => (prev ? producer(prev) : prev))
+    setDirty(true)
+    setSavedFlash(false)
+    setSaveError('')
   }, [])
 
-  const applyQuestionLocal = useCallback((questionId, patchFn) => {
-    setDraft((prev) => {
-      if (!prev) return prev
+  // ── Section mutations (local only) ─────────────────────────────────────
+
+  const addSection = useCallback((isAI) => {
+    const id = newId()
+    mutate((prev) => {
+      const order = prev.sections.length
       return {
         ...prev,
-        sections: prev.sections.map((s) => ({
+        sections: [
+          ...prev.sections,
+          {
+            id,
+            _isNew: true,
+            version_id: prev.id,
+            title: 'New section',
+            order,
+            is_ai_addendum: isAI,
+            questions: [],
+          },
+        ],
+      }
+    })
+    setTab(isAI ? 'ai' : 'standard')
+    setActiveSectionId(id)
+  }, [mutate])
+
+  const renameSection = useCallback((sectionId, title) => {
+    mutate((prev) => ({
+      ...prev,
+      sections: prev.sections.map((s) =>
+        s.id === sectionId ? { ...s, title } : s
+      ),
+    }))
+  }, [mutate])
+
+  const toggleSectionAI = useCallback((sectionId) => {
+    mutate((prev) => ({
+      ...prev,
+      sections: prev.sections.map((s) =>
+        s.id === sectionId ? { ...s, is_ai_addendum: !s.is_ai_addendum } : s
+      ),
+    }))
+  }, [mutate])
+
+  const deleteSection = useCallback((sectionId) => {
+    mutate((prev) => ({
+      ...prev,
+      sections: prev.sections.filter((s) => s.id !== sectionId),
+    }))
+  }, [mutate])
+
+  const reorderSectionsInTab = useCallback((newOrderedSections) => {
+    // newOrderedSections is the new order within the current tab's subset.
+    // Reassign `order` contiguously to the items in that subset, preserving
+    // the relative order of sections outside the subset by interleaving.
+    mutate((prev) => {
+      const subsetIds = new Set(newOrderedSections.map((s) => s.id))
+      const subsetOrder = new Map(newOrderedSections.map((s, idx) => [s.id, idx]))
+      // Stable ordering: sections in the subset follow their new order;
+      // sections outside the subset follow their existing order.
+      const remaining = prev.sections
+        .filter((s) => !subsetIds.has(s.id))
+        .slice()
+        .sort((a, b) => a.order - b.order)
+      const subset = newOrderedSections.slice()
+      // Merge subset at their original global positions (by picking subset
+      // rank in the filtered list and walking through).
+      const merged = []
+      // Walk through the original order; when we hit a subset member, emit the
+      // next subset item; otherwise emit the next remaining item.
+      const subsetIter = subset[Symbol.iterator]()
+      const remainingIter = remaining[Symbol.iterator]()
+      for (const orig of prev.sections.slice().sort((a, b) => a.order - b.order)) {
+        if (subsetIds.has(orig.id)) {
+          merged.push(subsetIter.next().value)
+        } else {
+          merged.push(remainingIter.next().value)
+        }
+      }
+      return {
+        ...prev,
+        sections: merged.map((s, idx) => ({ ...s, order: idx })),
+      }
+    })
+  }, [mutate])
+
+  // ── Question mutations (local only) ────────────────────────────────────
+
+  const addQuestion = useCallback((sectionId) => {
+    const id = newId()
+    mutate((prev) => ({
+      ...prev,
+      sections: prev.sections.map((s) => {
+        if (s.id !== sectionId) return s
+        const questions = s.questions || []
+        return {
           ...s,
-          questions: (s.questions || []).map((q) =>
-            q.id === questionId ? patchFn(q) : q
-          ),
-        })),
-      }
-    })
-  }, [])
+          questions: [
+            ...questions,
+            {
+              id,
+              _isNew: true,
+              version_id: prev.id,
+              section_id: sectionId,
+              question_number: null, // assigned by server on save
+              question_key: '(new)',
+              question_text: 'New question',
+              response_type: 'TEXT',
+              is_required: true,
+              hint_text: null,
+              allows_other: false,
+              order: questions.length,
+              options: [],
+            },
+          ],
+        }
+      }),
+    }))
+  }, [mutate])
 
-  const replaceQuestion = useCallback((serverQuestion) => {
-    setDraft((prev) => {
-      if (!prev) return prev
-      return {
-        ...prev,
-        sections: prev.sections.map((s) => {
-          // Remove the question from any section it isn't in, then add/replace
-          // in its new section. This handles inter-section moves.
-          const withoutIt = (s.questions || []).filter((q) => q.id !== serverQuestion.id)
-          if (s.id === serverQuestion.section_id) {
-            return {
-              ...s,
-              questions: [...withoutIt, serverQuestion].sort((a, b) => a.order - b.order),
-            }
-          }
-          return { ...s, questions: withoutIt }
-        }),
-      }
-    })
-  }, [])
+  const updateQuestion = useCallback((questionId, patch) => {
+    mutate((prev) => ({
+      ...prev,
+      sections: prev.sections.map((s) => ({
+        ...s,
+        questions: (s.questions || []).map((q) =>
+          q.id === questionId ? { ...q, ...patch } : q
+        ),
+      })),
+    }))
+  }, [mutate])
+
+  const deleteQuestion = useCallback((questionId) => {
+    mutate((prev) => ({
+      ...prev,
+      sections: prev.sections.map((s) => ({
+        ...s,
+        questions: (s.questions || []).filter((q) => q.id !== questionId),
+      })),
+    }))
+  }, [mutate])
+
+  const reorderQuestionsInSection = useCallback((sectionId, orderedQuestions) => {
+    mutate((prev) => ({
+      ...prev,
+      sections: prev.sections.map((s) => {
+        if (s.id !== sectionId) return s
+        return {
+          ...s,
+          questions: orderedQuestions.map((q, idx) => ({ ...q, order: idx })),
+        }
+      }),
+    }))
+  }, [mutate])
+
+  // ── Tab / active section derived state ─────────────────────────────────
 
   const sectionsForTab = useMemo(() => {
     if (!draft) return []
@@ -234,194 +349,118 @@ export default function Questionnaire() {
     [sectionsForTab, activeSectionId]
   )
 
-  // ── API helpers with save status ───────────────────────────────────────
+  // ── Save ───────────────────────────────────────────────────────────────
 
-  const withSaveStatus = useCallback(async (fn) => {
-    setSaveStatus('saving')
+  const saveDraft = useCallback(async () => {
+    if (!dirtyRef.current || !draft) return
+    setSaving(true)
+    setSaveError('')
     try {
-      const result = await fn()
-      setSaveStatus('saved')
-      setTimeout(() => setSaveStatus((s) => (s === 'saved' ? 'idle' : s)), 1500)
-      return result
-    } catch (err) {
-      setSaveStatus('error')
-      throw err
-    }
-  }, [])
-
-  // ── Section mutations ─────────────────────────────────────────────────
-
-  async function addSection(isAI) {
-    await withSaveStatus(async () => {
-      const res = await adminFetch('/api/admin/questionnaire/draft/sections', {
-        method: 'POST',
-        body: JSON.stringify({
-          title: 'New section',
-          is_ai_addendum: isAI,
-        }),
-      })
-      if (!res.ok) throw new Error('Failed to create section')
-      const section = await res.json()
-      setDraft((prev) => ({ ...prev, sections: [...prev.sections, section] }))
-      setTab(isAI ? 'ai' : 'standard')
-      setActiveSectionId(section.id)
-    })
-  }
-
-  async function saveSection(sectionId, patch) {
-    await withSaveStatus(async () => {
-      const res = await adminFetch(
-        `/api/admin/questionnaire/draft/sections/${sectionId}`,
-        { method: 'PATCH', body: JSON.stringify(patch) }
-      )
-      if (!res.ok) throw new Error('Failed to save section')
-      const updated = await res.json()
-      applySectionLocal(sectionId, updated)
-    })
-  }
-
-  async function deleteSection(sectionId) {
-    await withSaveStatus(async () => {
-      const res = await adminFetch(
-        `/api/admin/questionnaire/draft/sections/${sectionId}`,
-        { method: 'DELETE' }
-      )
-      if (!res.ok) throw new Error('Failed to delete section')
-      setDraft((prev) => ({
-        ...prev,
-        sections: prev.sections.filter((s) => s.id !== sectionId),
-      }))
-    })
-  }
-
-  async function reorderSections(newOrderedSections) {
-    // newOrderedSections is the new order within the current tab's filter.
-    // We apply the new `order` values within that subset.
-    const section_orders = newOrderedSections.map((s, idx) => ({
-      id: s.id,
-      order: idx,
-    }))
-    // Optimistic local update
-    setDraft((prev) => {
-      const idMap = new Map(section_orders.map((o) => [o.id, o.order]))
-      return {
-        ...prev,
-        sections: prev.sections.map((s) =>
-          idMap.has(s.id) ? { ...s, order: idMap.get(s.id) } : s
-        ),
+      const payload = {
+        sections: draft.sections
+          .slice()
+          .sort((a, b) => a.order - b.order)
+          .map((s) => ({
+            id: s._isNew ? null : s.id,
+            title: s.title,
+            is_ai_addendum: s.is_ai_addendum,
+            questions: (s.questions || [])
+              .slice()
+              .sort((a, b) => a.order - b.order)
+              .map((q) => ({
+                id: q._isNew ? null : q.id,
+                question_text: q.question_text,
+                response_type: q.response_type,
+                is_required: q.is_required,
+                allows_other: q.allows_other,
+                hint_text: q.hint_text,
+                options: (q.options || [])
+                  .slice()
+                  .sort((a, b) => a.order - b.order)
+                  .map((o) => ({
+                    id: o._isNew ? null : o.id,
+                    label: o.label,
+                  })),
+              })),
+          })),
       }
-    })
-    await withSaveStatus(async () => {
-      const res = await adminFetch('/api/admin/questionnaire/draft/reorder', {
+
+      const res = await adminFetch('/api/admin/questionnaire/draft/save', {
         method: 'POST',
-        body: JSON.stringify({ section_orders }),
+        body: JSON.stringify(payload),
       })
-      if (!res.ok) throw new Error('Failed to reorder sections')
-    })
-  }
-
-  // ── Question mutations ────────────────────────────────────────────────
-
-  async function addQuestion(sectionId) {
-    await withSaveStatus(async () => {
-      const res = await adminFetch('/api/admin/questionnaire/draft/questions', {
-        method: 'POST',
-        body: JSON.stringify({
-          section_id: sectionId,
-          question_text: 'New question',
-          response_type: 'TEXT',
-          is_required: true,
-        }),
-      })
-      if (!res.ok) throw new Error('Failed to create question')
-      const payload = await res.json()
-      const q = payload.question
-      setDraft((prev) => ({
-        ...prev,
-        sections: prev.sections.map((s) =>
-          s.id === sectionId
-            ? { ...s, questions: [...(s.questions || []), q] }
-            : s
-        ),
-      }))
-    })
-  }
-
-  async function saveQuestion(questionId, patch, { onWarnings } = {}) {
-    return withSaveStatus(async () => {
-      const res = await adminFetch(
-        `/api/admin/questionnaire/draft/questions/${questionId}`,
-        { method: 'PATCH', body: JSON.stringify(patch) }
-      )
       if (!res.ok) {
         const body = await res.json().catch(() => ({}))
-        throw new Error(body.detail || 'Failed to save question')
+        throw new Error(body.detail || 'Save failed')
       }
-      const payload = await res.json()
-      replaceQuestion(payload.question)
-      if (payload.warnings && payload.warnings.length && onWarnings) {
-        onWarnings(payload.warnings, payload.question)
+      const data = await res.json()
+      setDraft(normalizeDraft(data.draft))
+      setDirty(false)
+      setSavedFlash(true)
+      setTimeout(() => setSavedFlash(false), 2000)
+      if (data.warnings && data.warnings.length) {
+        setWarningToast(data.warnings.join(' · '))
       }
-      return payload
-    })
-  }
-
-  async function deleteQuestion(questionId) {
-    await withSaveStatus(async () => {
-      const res = await adminFetch(
-        `/api/admin/questionnaire/draft/questions/${questionId}`,
-        { method: 'DELETE' }
-      )
-      if (!res.ok) throw new Error('Failed to delete question')
-      setDraft((prev) => ({
-        ...prev,
-        sections: prev.sections.map((s) => ({
-          ...s,
-          questions: (s.questions || []).filter((q) => q.id !== questionId),
-        })),
-      }))
-    })
-  }
-
-  async function reorderQuestions(sectionId, orderedQuestions) {
-    const question_orders = {
-      [sectionId]: orderedQuestions.map((q, idx) => ({ id: q.id, order: idx })),
+    } catch (err) {
+      setSaveError(err.message || 'Save failed')
+    } finally {
+      setSaving(false)
     }
-    // Optimistic local reorder
-    setDraft((prev) => ({
-      ...prev,
-      sections: prev.sections.map((s) => {
-        if (s.id !== sectionId) return s
-        const orderMap = new Map(question_orders[sectionId].map((o) => [o.id, o.order]))
-        return {
-          ...s,
-          questions: (s.questions || [])
-            .map((q) => (orderMap.has(q.id) ? { ...q, order: orderMap.get(q.id) } : q))
-            .sort((a, b) => a.order - b.order),
-        }
-      }),
-    }))
-    await withSaveStatus(async () => {
-      const res = await adminFetch('/api/admin/questionnaire/draft/reorder', {
-        method: 'POST',
-        body: JSON.stringify({ question_orders }),
-      })
-      if (!res.ok) throw new Error('Failed to reorder questions')
-    })
-  }
+  }, [adminFetch, draft])
 
-  // ── Response-type confirm modal wiring ─────────────────────────────────
+  const saveDraftRef = useRef(saveDraft)
+  saveDraftRef.current = saveDraft
+
+  // ── beforeunload guard ─────────────────────────────────────────────────
+
+  useEffect(() => {
+    function handler(e) {
+      if (dirtyRef.current) {
+        e.preventDefault()
+        e.returnValue = ''
+      }
+    }
+    window.addEventListener('beforeunload', handler)
+    return () => window.removeEventListener('beforeunload', handler)
+  }, [])
+
+  // ── document.title dirty marker ────────────────────────────────────────
+
+  useEffect(() => {
+    const previous = document.title
+    document.title = dirty ? `• ${TITLE_BASE}` : TITLE_BASE
+    return () => { document.title = previous }
+  }, [dirty])
+
+  // ── Cmd/Ctrl+S ─────────────────────────────────────────────────────────
+
+  useEffect(() => {
+    function onKey(e) {
+      if ((e.metaKey || e.ctrlKey) && (e.key === 's' || e.key === 'S')) {
+        e.preventDefault()
+        if (dirtyRef.current) saveDraftRef.current?.()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
+  // ── Response-type confirmation (client-side flag) ──────────────────────
 
   function requestResponseTypeChange(question, newType, commit) {
-    setTypeChangePrompt({
-      question,
-      newType,
-      commit, // function to run if confirmed
-    })
+    setTypeChangePrompt({ question, newType, commit })
   }
 
   function openPreview() {
     window.open(`${BASE_PATH}/admin/questionnaire/preview`, '_blank', 'noopener,noreferrer')
+  }
+
+  function handlePreviewClick() {
+    if (dirty) {
+      setPreviewPrompt(true)
+    } else {
+      openPreview()
+    }
   }
 
   async function runRenumber() {
@@ -455,7 +494,6 @@ export default function Questionnaire() {
             arrives in a later phase — until then changes live in the draft.
           </p>
         </div>
-        <SaveIndicator status={saveStatus} />
       </div>
 
       {loading ? (
@@ -472,14 +510,14 @@ export default function Questionnaire() {
               <button
                 className={`tab-btn${tab === 'standard' ? ' tab-btn--active' : ''}`}
                 style={s.tabBtn}
-                onClick={() => guardSwitch(() => setTab('standard'))}
+                onClick={() => setTab('standard')}
               >
                 Standard
               </button>
               <button
                 className={`tab-btn${tab === 'ai' ? ' tab-btn--active' : ''}`}
                 style={s.tabBtn}
-                onClick={() => guardSwitch(() => setTab('ai'))}
+                onClick={() => setTab('ai')}
               >
                 AI Addendum
               </button>
@@ -488,12 +526,10 @@ export default function Questionnaire() {
             <SectionList
               sections={sectionsForTab}
               activeSectionId={activeSectionId}
-              onSelect={(id) => guardSwitch(() => setActiveSectionId(id))}
-              onReorder={reorderSections}
-              onRename={(id, title) => saveSection(id, { title })}
-              onToggleAI={(sec) =>
-                saveSection(sec.id, { is_ai_addendum: !sec.is_ai_addendum })
-              }
+              onSelect={setActiveSectionId}
+              onReorder={reorderSectionsInTab}
+              onRename={renameSection}
+              onToggleAI={toggleSectionAI}
               onDelete={deleteSection}
             />
 
@@ -501,7 +537,7 @@ export default function Questionnaire() {
               <button
                 className="btn btn-secondary"
                 style={{ width: '100%' }}
-                onClick={() => guardSwitch(() => addSection(tab === 'ai'))}
+                onClick={() => addSection(tab === 'ai')}
               >
                 + Add Section
               </button>
@@ -517,14 +553,13 @@ export default function Questionnaire() {
             ) : (
               <SectionEditor
                 section={activeSection}
-                onReorderQuestions={(ordered) => reorderQuestions(activeSection.id, ordered)}
+                onReorderQuestions={(ordered) =>
+                  reorderQuestionsInSection(activeSection.id, ordered)
+                }
                 onAddQuestion={() => addQuestion(activeSection.id)}
-                onSaveQuestion={saveQuestion}
+                onUpdateQuestion={updateQuestion}
                 onDeleteQuestion={deleteQuestion}
                 onRequestTypeChange={requestResponseTypeChange}
-                onKeyRegenerated={(q) => setKeyChangeNotice(q)}
-                guardSwitch={guardSwitch}
-                registerActiveForm={registerActiveForm}
               />
             )}
           </main>
@@ -536,6 +571,11 @@ export default function Questionnaire() {
               <div style={s.metaVersionRow}>
                 <span style={s.metaVersionLabel}>{draft.version_label}</span>
                 <span className="badge" style={s.draftBadge}>Draft</span>
+                {dirty && (
+                  <span className="badge" style={s.dirtyChip} title="Unsaved changes">
+                    Unsaved changes
+                  </span>
+                )}
               </div>
               <div style={s.metaHint}>
                 Changes apply when the draft is published.
@@ -555,7 +595,7 @@ export default function Questionnaire() {
               <button
                 className="btn btn-secondary"
                 style={s.metaAction}
-                onClick={openPreview}
+                onClick={handlePreviewClick}
               >
                 Preview as vendor
               </button>
@@ -565,9 +605,38 @@ export default function Questionnaire() {
 
             <div style={s.metaSection}>
               <button
+                className="btn btn-primary"
+                style={s.metaAction}
+                onClick={saveDraft}
+                disabled={!dirty || saving}
+                title={
+                  !dirty && !savedFlash
+                    ? 'No unsaved changes'
+                    : dirty
+                      ? 'Save draft (Ctrl/Cmd+S)'
+                      : undefined
+                }
+              >
+                {saving
+                  ? 'Saving…'
+                  : savedFlash
+                    ? 'Saved ✓'
+                    : 'Save draft'}
+              </button>
+              {saveError && (
+                <div style={s.saveErrorText}>{saveError}</div>
+              )}
+            </div>
+
+            <div style={s.metaDivider} />
+
+            <div style={s.metaSection}>
+              <button
                 className="btn btn-secondary"
                 style={s.metaAction}
                 onClick={() => setRenumberPrompt(true)}
+                disabled={dirty}
+                title={dirty ? 'Save draft before renumbering' : undefined}
               >
                 Renumber questions
               </button>
@@ -608,7 +677,8 @@ export default function Questionnaire() {
               Changing the response type from{' '}
               <strong>{RESPONSE_TYPE_LABELS[typeChangePrompt.question.response_type]}</strong>{' '}
               to <strong>{RESPONSE_TYPE_LABELS[typeChangePrompt.newType]}</strong> will
-              treat this as a new question for refresh matching — a new key will be minted.
+              treat this as a new question for refresh matching — a new key will be minted
+              when you save.
               Continue?
             </>
           }
@@ -621,13 +691,6 @@ export default function Questionnaire() {
             typeChangePrompt.commit(null) // signal revert
             setTypeChangePrompt(null)
           }}
-        />
-      )}
-
-      {keyChangeNotice && (
-        <Toast
-          message={`New key minted: ${keyChangeNotice.question_key}`}
-          onDismiss={() => setKeyChangeNotice(null)}
         />
       )}
 
@@ -657,25 +720,29 @@ export default function Questionnaire() {
         />
       )}
 
-      {dirtyPrompt && (
-        <DirtySwitchPrompt
-          onSave={dirtyPrompt.onSave}
-          onDiscard={dirtyPrompt.onDiscard}
-          onCancel={dirtyPrompt.onCancel}
+      {previewPrompt && (
+        <PreviewDirtyPrompt
+          onSaveAndPreview={async () => {
+            setPreviewPrompt(false)
+            await saveDraft()
+            openPreview()
+          }}
+          onPreviewAnyway={() => {
+            setPreviewPrompt(false)
+            openPreview()
+          }}
+          onCancel={() => setPreviewPrompt(false)}
+        />
+      )}
+
+      {warningToast && (
+        <Toast
+          message={warningToast}
+          onDismiss={() => setWarningToast(null)}
         />
       )}
     </AdminLayout>
   )
-}
-
-// ─── Save indicator ────────────────────────────────────────────────────────
-
-function SaveIndicator({ status }) {
-  if (status === 'idle') return <span style={s.saveDot} />
-  if (status === 'saving') return <span style={s.saveText}>Saving…</span>
-  if (status === 'saved') return <span style={{ ...s.saveText, color: 'var(--risk-low)' }}>✓ Saved</span>
-  if (status === 'error') return <span style={{ ...s.saveText, color: 'var(--risk-high)' }}>Save failed</span>
-  return null
 }
 
 // ─── Section list (sortable) ───────────────────────────────────────────────
@@ -707,7 +774,7 @@ function SectionList({ sections, activeSectionId, onSelect, onReorder, onRename,
                 isActive={section.id === activeSectionId}
                 onSelect={() => onSelect(section.id)}
                 onRename={(title) => onRename(section.id, title)}
-                onToggleAI={() => onToggleAI(section)}
+                onToggleAI={() => onToggleAI(section.id)}
                 onDelete={() => {
                   const count = section.questions?.length ?? 0
                   const msg = count > 0
@@ -869,19 +936,13 @@ function SectionEditor({
   section,
   onReorderQuestions,
   onAddQuestion,
-  onSaveQuestion,
+  onUpdateQuestion,
   onDeleteQuestion,
   onRequestTypeChange,
-  onKeyRegenerated,
-  guardSwitch,
-  registerActiveForm,
 }) {
   const [expandedId, setExpandedId] = useState(null)
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }))
 
-  const requestToggle = (qid) => {
-    guardSwitch(() => setExpandedId((id) => (id === qid ? null : qid)))
-  }
   const questions = useMemo(
     () => (section.questions || []).slice().sort((a, b) => a.order - b.order),
     [section.questions]
@@ -925,14 +986,13 @@ function SectionEditor({
                   key={q.id}
                   question={q}
                   expanded={expandedId === q.id}
-                  onToggle={() => requestToggle(q.id)}
-                  onSave={onSaveQuestion}
+                  onToggle={() => setExpandedId((id) => (id === q.id ? null : q.id))}
+                  onUpdate={(patch) => onUpdateQuestion(q.id, patch)}
                   onDelete={() => {
-                    if (window.confirm(`Delete question Q${q.question_number}?`)) onDeleteQuestion(q.id)
+                    const label = q.question_number ?? 'new'
+                    if (window.confirm(`Delete question Q${label}?`)) onDeleteQuestion(q.id)
                   }}
                   onRequestTypeChange={onRequestTypeChange}
-                  onKeyRegenerated={onKeyRegenerated}
-                  registerActiveForm={registerActiveForm}
                 />
               ))}
             </SortableContext>
@@ -976,14 +1036,14 @@ function QuestionCard({
   question,
   expanded,
   onToggle,
-  onSave,
+  onUpdate,
   onDelete,
   onRequestTypeChange,
-  onKeyRegenerated,
-  registerActiveForm,
   dragAttributes,
   dragListeners,
 }) {
+  const numberLabel = question.question_number ?? '—'
+
   if (!expanded) {
     return (
       <div className="card" style={s.questionCard} onClick={onToggle}>
@@ -997,7 +1057,7 @@ function QuestionCard({
           >
             <DragHandleIcon />
           </button>
-          <span style={s.questionNumber}>Q{question.question_number}</span>
+          <span style={s.questionNumber}>Q{numberLabel}</span>
           <span style={s.questionText}>{question.question_text}</span>
         </div>
         <div style={s.questionMeta}>
@@ -1012,6 +1072,9 @@ function QuestionCard({
           </span>
           {question.allows_other && (
             <span className="badge" style={s.otherBadge}>Allows "Other"</span>
+          )}
+          {question._isNew && (
+            <span className="badge" style={s.newBadge}>New</span>
           )}
           {question.options && question.options.length > 0 && (
             <span style={s.optionCount}>
@@ -1028,11 +1091,9 @@ function QuestionCard({
       key={question.id}
       question={question}
       onCollapse={onToggle}
-      onSave={onSave}
+      onUpdate={onUpdate}
       onDelete={onDelete}
       onRequestTypeChange={onRequestTypeChange}
-      onKeyRegenerated={onKeyRegenerated}
-      registerActiveForm={registerActiveForm}
       dragAttributes={dragAttributes}
       dragListeners={dragListeners}
     />
@@ -1042,157 +1103,66 @@ function QuestionCard({
 function QuestionEditForm({
   question,
   onCollapse,
-  onSave,
+  onUpdate,
   onDelete,
   onRequestTypeChange,
-  onKeyRegenerated,
-  registerActiveForm,
   dragAttributes,
   dragListeners,
 }) {
-  // Local editable copy. Edits stay local until the user clicks Save.
-  const [original, setOriginal] = useState(question)
-  const [local, setLocal] = useState(question)
-  const [dirty, setDirty] = useState(false)
-  const [savedAt, setSavedAt] = useState(null)
   const [showHint, setShowHint] = useState(Boolean(question.hint_text))
 
-  const dirtyRef = useRef(false)
-  dirtyRef.current = dirty
-
-  // Reconcile server-side identity changes (key regen, number shifts) without
-  // clobbering in-flight local edits.
-  useEffect(() => {
-    setLocal((prev) => ({
-      ...prev,
-      question_key: question.question_key,
-      question_number: question.question_number,
-    }))
-    setOriginal((prev) => ({
-      ...prev,
-      question_key: question.question_key,
-      question_number: question.question_number,
-    }))
-  }, [question.question_key, question.question_number])
-
-  // Auto-clear "Saved just now" after 3s.
-  useEffect(() => {
-    if (!savedAt) return
-    const t = setTimeout(() => setSavedAt(null), 3000)
-    return () => clearTimeout(t)
-  }, [savedAt])
-
-  function markDirty(next) {
-    setLocal(next)
-    setDirty(true)
-    setSavedAt(null)
-  }
-
-  function updateField(field, value) {
-    markDirty({ ...local, [field]: value })
-  }
-
-  // Response type change — confirmation modal first, then update local only.
+  // Response-type change — confirm first, then apply.
   function handleResponseTypeChange(newType) {
-    onRequestTypeChange(local, newType, (confirmedType) => {
+    onRequestTypeChange(question, newType, (confirmedType) => {
       if (confirmedType === null) return
       const isChoice = CHOICE_TYPES.has(newType)
-      markDirty({
-        ...local,
+      onUpdate({
         response_type: newType,
-        allows_other: isChoice ? local.allows_other : false,
-        options: isChoice ? local.options : [],
+        allows_other: isChoice ? question.allows_other : false,
+        options: isChoice ? question.options : [],
       })
     })
   }
 
   function handleOptionChange(idx, label) {
-    markDirty({
-      ...local,
-      options: local.options.map((o, i) => (i === idx ? { ...o, label } : o)),
+    onUpdate({
+      options: question.options.map((o, i) => (i === idx ? { ...o, label } : o)),
     })
   }
 
   function handleAddOption() {
-    const len = local.options?.length ?? 0
-    markDirty({
-      ...local,
-      options: [...(local.options || []), { id: null, label: `Option ${len + 1}`, order: len }],
+    const len = question.options?.length ?? 0
+    onUpdate({
+      options: [
+        ...(question.options || []),
+        { id: newId(), _isNew: true, label: `Option ${len + 1}`, order: len },
+      ],
     })
   }
 
   function handleDeleteOption(idx) {
-    markDirty({ ...local, options: local.options.filter((_, i) => i !== idx) })
+    onUpdate({
+      options: question.options
+        .filter((_, i) => i !== idx)
+        .map((o, i) => ({ ...o, order: i })),
+    })
   }
 
   function handleOptionDragEnd(event) {
     const { active, over } = event
     if (!over || active.id === over.id) return
-    const oldIndex = local.options.findIndex((o) => optionKey(o) === active.id)
-    const newIndex = local.options.findIndex((o) => optionKey(o) === over.id)
+    const oldIndex = question.options.findIndex((o) => o.id === active.id)
+    const newIndex = question.options.findIndex((o) => o.id === over.id)
     if (oldIndex === -1 || newIndex === -1) return
-    markDirty({ ...local, options: arrayMove(local.options, oldIndex, newIndex) })
+    const reordered = arrayMove(question.options, oldIndex, newIndex).map(
+      (o, i) => ({ ...o, order: i })
+    )
+    onUpdate({ options: reordered })
   }
 
-  const handleSave = useCallback(async () => {
-    if (!dirtyRef.current) return
-    const isChoice = CHOICE_TYPES.has(local.response_type)
-    const patch = {
-      question_text: local.question_text,
-      response_type: local.response_type,
-      is_required: local.is_required,
-      allows_other: isChoice ? local.allows_other : false,
-      hint_text: local.hint_text && local.hint_text.length ? local.hint_text : null,
-      ...(isChoice
-        ? { options: (local.options || []).map((o) => ({ id: o.id, label: o.label })) }
-        : {}),
-    }
-    const payload = await onSave(question.id, patch, {
-      onWarnings: (_w, serverQ) => onKeyRegenerated?.(serverQ),
-    })
-    const saved = payload?.question || local
-    setLocal(saved)
-    setOriginal(saved)
-    setDirty(false)
-    setSavedAt(Date.now())
-  }, [local, onSave, question.id, onKeyRegenerated])
-
-  const handleCancel = useCallback(() => {
-    setLocal(original)
-    setDirty(false)
-    setSavedAt(null)
-    setShowHint(Boolean(original.hint_text))
-  }, [original])
-
-  // Stable wrappers so the registration effect only runs once on mount.
-  const saveRef = useRef(handleSave)
-  const cancelRef = useRef(handleCancel)
-  saveRef.current = handleSave
-  cancelRef.current = handleCancel
-
-  useEffect(() => {
-    registerActiveForm({
-      isDirty: () => dirtyRef.current,
-      save: () => saveRef.current(),
-      discard: () => cancelRef.current(),
-    })
-    return () => registerActiveForm(null)
-  }, [registerActiveForm])
-
-  // Cmd/Ctrl+S saves the current form (only one edit form is mounted at a time).
-  useEffect(() => {
-    function onKey(e) {
-      if ((e.metaKey || e.ctrlKey) && (e.key === 's' || e.key === 'S')) {
-        e.preventDefault()
-        saveRef.current()
-      }
-    }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [])
-
-  const isChoice = CHOICE_TYPES.has(local.response_type)
+  const isChoice = CHOICE_TYPES.has(question.response_type)
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }))
+  const numberLabel = question.question_number ?? '—'
 
   return (
     <div className="card" style={s.editCard}>
@@ -1205,9 +1175,12 @@ function QuestionEditForm({
         >
           <DragHandleIcon />
         </button>
-        <span style={s.questionNumber}>Q{local.question_number}</span>
+        <span style={s.questionNumber}>Q{numberLabel}</span>
         <span style={s.questionKeyLabel}>Key:</span>
-        <span style={s.questionKey}>{local.question_key}</span>
+        <span style={s.questionKey}>{question.question_key}</span>
+        {question._isNew && (
+          <span className="badge" style={s.newBadge}>New</span>
+        )}
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
           <button className="btn btn-secondary" onClick={onCollapse}>Collapse</button>
           <button
@@ -1226,8 +1199,8 @@ function QuestionEditForm({
         <textarea
           className="input"
           style={s.textarea}
-          value={local.question_text}
-          onChange={(e) => updateField('question_text', e.target.value)}
+          value={question.question_text}
+          onChange={(e) => onUpdate({ question_text: e.target.value })}
         />
       </div>
 
@@ -1236,9 +1209,9 @@ function QuestionEditForm({
           <label style={s.fieldLabel}>Response type</label>
           <select
             className="input"
-            value={local.response_type}
+            value={question.response_type}
             onChange={(e) => {
-              if (e.target.value !== local.response_type) {
+              if (e.target.value !== question.response_type) {
                 handleResponseTypeChange(e.target.value)
               }
             }}
@@ -1252,23 +1225,23 @@ function QuestionEditForm({
         <label style={{ ...s.fieldLabel, display: 'flex', alignItems: 'center', gap: 8, paddingTop: 26 }}>
           <input
             type="checkbox"
-            checked={local.is_required}
-            onChange={(e) => updateField('is_required', e.target.checked)}
+            checked={question.is_required}
+            onChange={(e) => onUpdate({ is_required: e.target.checked })}
           />
           Required
         </label>
       </div>
 
       <div style={s.fieldBlock}>
-        {showHint || local.hint_text ? (
+        {showHint || question.hint_text ? (
           <>
             <label style={s.fieldLabel}>Hint text</label>
             <textarea
               className="input"
               style={s.hintArea}
               placeholder="Optional — shown below the question"
-              value={local.hint_text || ''}
-              onChange={(e) => updateField('hint_text', e.target.value)}
+              value={question.hint_text || ''}
+              onChange={(e) => onUpdate({ hint_text: e.target.value || null })}
             />
           </>
         ) : (
@@ -1285,18 +1258,18 @@ function QuestionEditForm({
       {isChoice && (
         <div style={s.fieldBlock}>
           <label style={s.fieldLabel}>Options</label>
-          {(local.options || []).length === 0 ? (
+          {(question.options || []).length === 0 ? (
             <div style={s.emptyOptions}>No options yet.</div>
           ) : (
             <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleOptionDragEnd}>
               <SortableContext
-                items={(local.options || []).map(optionKey)}
+                items={(question.options || []).map((o) => o.id)}
                 strategy={verticalListSortingStrategy}
               >
                 <div style={s.optionList}>
-                  {local.options.map((opt, idx) => (
+                  {question.options.map((opt, idx) => (
                     <SortableOptionRow
-                      key={optionKey(opt)}
+                      key={opt.id}
                       option={opt}
                       onChange={(label) => handleOptionChange(idx, label)}
                       onDelete={() => handleDeleteOption(idx)}
@@ -1318,56 +1291,19 @@ function QuestionEditForm({
           <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10, fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
             <input
               type="checkbox"
-              checked={local.allows_other}
-              onChange={(e) => updateField('allows_other', e.target.checked)}
+              checked={question.allows_other}
+              onChange={(e) => onUpdate({ allows_other: e.target.checked })}
             />
             Allow "Other" response
           </label>
         </div>
       )}
-
-      <div style={s.editFooter}>
-        <span
-          style={{
-            ...s.footerIndicator,
-            color: dirty
-              ? 'var(--status-risk-pending)'
-              : savedAt
-                ? 'var(--risk-low)'
-                : 'var(--text-muted)',
-          }}
-        >
-          {dirty ? 'Unsaved changes' : savedAt ? '✓ Saved just now' : ''}
-        </span>
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
-          <button
-            className="btn btn-secondary"
-            onClick={handleCancel}
-            disabled={!dirty}
-          >
-            Cancel
-          </button>
-          <button
-            className="btn btn-primary"
-            onClick={handleSave}
-            disabled={!dirty}
-          >
-            Save
-          </button>
-        </div>
-      </div>
     </div>
   )
 }
 
-function optionKey(opt) {
-  // Stable key for drag items: use id for existing, label+index for new.
-  return opt.id || `new:${opt.label}:${opt.order ?? 0}`
-}
-
 function SortableOptionRow({ option, onChange, onDelete }) {
-  const id = optionKey(option)
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id })
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: option.id })
   const style = {
     transform: CSS.Transform.toString(transform),
     transition,
@@ -1401,7 +1337,7 @@ function SortableOptionRow({ option, onChange, onDelete }) {
   )
 }
 
-// ─── Confirm modal ─────────────────────────────────────────────────────────
+// ─── Confirm / prompt modals ───────────────────────────────────────────────
 
 function ConfirmModal({ title, body, confirmLabel, onConfirm, onCancel }) {
   return (
@@ -1418,18 +1354,23 @@ function ConfirmModal({ title, body, confirmLabel, onConfirm, onCancel }) {
   )
 }
 
-function DirtySwitchPrompt({ onSave, onDiscard, onCancel }) {
+function PreviewDirtyPrompt({ onSaveAndPreview, onPreviewAnyway, onCancel }) {
   return (
     <div style={s.modalOverlay} onClick={onCancel}>
       <div className="card" style={s.modalCard} onClick={(e) => e.stopPropagation()}>
         <h3 style={s.modalTitle}>Unsaved changes</h3>
         <div style={s.modalBody}>
-          You have unsaved changes in this question. Save them, discard, or cancel?
+          You have unsaved changes. Preview shows the last saved state.
+          Save draft first to preview your new changes.
         </div>
         <div style={s.modalActions}>
           <button className="btn btn-secondary" onClick={onCancel}>Cancel</button>
-          <button className="btn btn-secondary" onClick={onDiscard}>Discard</button>
-          <button className="btn btn-primary" onClick={onSave}>Save</button>
+          <button className="btn btn-secondary" onClick={onPreviewAnyway}>
+            Preview saved state anyway
+          </button>
+          <button className="btn btn-primary" onClick={onSaveAndPreview}>
+            Save and preview
+          </button>
         </div>
       </div>
     </div>
@@ -1464,10 +1405,6 @@ const s = {
     marginTop: 4, fontSize: 'var(--text-sm)',
     color: 'var(--text-secondary)', maxWidth: 640, lineHeight: 1.5,
   },
-  saveText: {
-    fontSize: 'var(--text-sm)', color: 'var(--text-muted)',
-  },
-  saveDot: { width: 0, height: 0 },
   loading: {
     padding: '40px 0', textAlign: 'center',
     fontSize: 'var(--text-sm)', color: 'var(--text-muted)',
@@ -1613,15 +1550,6 @@ const s = {
     display: 'flex', alignItems: 'center', gap: 8,
     flexWrap: 'wrap',
   },
-  editFooter: {
-    display: 'flex', alignItems: 'center', gap: 12,
-    marginTop: 4, paddingTop: 12,
-    borderTop: '1px solid var(--border)',
-  },
-  footerIndicator: {
-    fontSize: 'var(--text-xs)',
-    fontWeight: 500,
-  },
   questionHeader: {
     display: 'flex', gap: 8, alignItems: 'flex-start',
   },
@@ -1648,6 +1576,10 @@ const s = {
   },
   optionalBadge: { background: 'var(--bg-subtle)', color: 'var(--text-muted)' },
   otherBadge: { background: 'var(--blue-subtle)', color: 'var(--blue)' },
+  newBadge: {
+    background: 'color-mix(in srgb, var(--status-risk-pending) 18%, transparent)',
+    color: 'var(--status-risk-pending)',
+  },
   optionCount: { fontSize: 'var(--text-xs)', color: 'var(--text-muted)' },
   questionKeyLabel: {
     fontSize: 'var(--text-xs)', color: 'var(--text-muted)',
@@ -1723,7 +1655,9 @@ const s = {
     color: 'var(--text-muted)',
     textTransform: 'uppercase', letterSpacing: '0.06em',
   },
-  metaVersionRow: { display: 'flex', alignItems: 'center', gap: 8 },
+  metaVersionRow: {
+    display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+  },
   metaVersionLabel: {
     fontFamily: 'Geist Mono, monospace',
     fontSize: 'var(--text-md)', fontWeight: 600,
@@ -1733,6 +1667,10 @@ const s = {
     background: 'color-mix(in srgb, var(--status-draft) 20%, transparent)',
     color: 'var(--status-draft)',
   },
+  dirtyChip: {
+    background: 'color-mix(in srgb, var(--status-risk-pending) 18%, transparent)',
+    color: 'var(--status-risk-pending)',
+  },
   metaHint: {
     fontSize: 'var(--text-xs)', color: 'var(--text-muted)',
     lineHeight: 1.5,
@@ -1740,6 +1678,12 @@ const s = {
   metaValue: { fontSize: 'var(--text-sm)', color: 'var(--text-primary)' },
   metaAction: { width: '100%' },
   metaActions: { display: 'flex', flexDirection: 'column', gap: 8 },
+  saveErrorText: {
+    marginTop: 4,
+    fontSize: 'var(--text-xs)',
+    color: 'var(--risk-high)',
+    lineHeight: 1.4,
+  },
 
   modalOverlay: {
     position: 'fixed', inset: 0,
@@ -1760,7 +1704,7 @@ const s = {
     lineHeight: 1.5,
   },
   modalActions: {
-    display: 'flex', justifyContent: 'flex-end', gap: 8,
+    display: 'flex', justifyContent: 'flex-end', gap: 8, flexWrap: 'wrap',
   },
   toast: {
     position: 'fixed', bottom: 24, right: 24,
@@ -1772,6 +1716,7 @@ const s = {
     display: 'flex', alignItems: 'center', gap: 12,
     fontSize: 'var(--text-sm)', color: 'var(--text-primary)',
     zIndex: 60,
+    maxWidth: 480,
   },
   toastClose: {
     background: 'transparent', border: 'none', cursor: 'pointer',

@@ -1,9 +1,10 @@
 """Admin questionnaire endpoints.
 
 Phase Q2 added read-only listing of versions, sections, questions, and options.
-Phase Q3 adds full write capability on the draft: section & question CRUD plus
-batch reorder. All writes reject against non-draft versions, sanitize free-text
-inputs, and produce audit-log entries.
+Phase Q3 originally exposed a set of per-mutation endpoints; the editor has
+since moved to a single batched save where the full draft state is posted and
+the backend reconciles it against the current DB. The per-mutation endpoints
+were removed so the two code paths cannot drift.
 """
 from __future__ import annotations
 
@@ -22,16 +23,11 @@ from app.models.question_option import QuestionOption
 from app.models.questionnaire_section import QuestionnaireSection
 from app.models.questionnaire_version import QuestionnaireVersion
 from app.schemas.questionnaire import (
-    OptionInput,
-    QuestionCreate,
-    QuestionUpdate,
-    QuestionWriteResponse,
     QuestionnaireVersionDetail,
     QuestionnaireVersionSummary,
-    ReorderBody,
-    SectionCreate,
-    SectionDeleteResponse,
-    SectionUpdate,
+    SaveDraftBody,
+    SaveDraftResponse,
+    SaveDraftSummary,
 )
 from app.services.audit import log_action
 from app.services.auth import get_admin_user
@@ -61,83 +57,19 @@ async def _load_version_detail(
     return result.scalar_one_or_none()
 
 
-async def _require_draft_version(
-    db: AsyncSession, version_id: uuid.UUID
-) -> QuestionnaireVersion:
-    version = (
-        await db.execute(
-            select(QuestionnaireVersion).where(QuestionnaireVersion.id == version_id)
-        )
-    ).scalar_one_or_none()
-    if version is None:
-        raise HTTPException(status_code=404, detail="Questionnaire version not found")
-    if not version.is_draft:
-        raise HTTPException(status_code=400, detail="Only the draft version can be edited")
-    return version
-
-
-async def _load_draft_section(
-    db: AsyncSession, section_id: uuid.UUID
-) -> QuestionnaireSection:
-    section = (
-        await db.execute(
-            select(QuestionnaireSection)
-            .where(QuestionnaireSection.id == section_id)
-            .options(selectinload(QuestionnaireSection.questions))
-        )
-    ).scalar_one_or_none()
-    if section is None:
-        raise HTTPException(status_code=404, detail="Section not found")
-    await _require_draft_version(db, section.version_id)
-    return section
-
-
-async def _load_draft_question(
-    db: AsyncSession, question_id: uuid.UUID
-) -> Question:
-    question = (
-        await db.execute(
-            select(Question)
-            .where(Question.id == question_id)
-            .options(selectinload(Question.options))
-        )
-    ).scalar_one_or_none()
-    if question is None:
-        raise HTTPException(status_code=404, detail="Question not found")
-    await _require_draft_version(db, question.version_id)
-    return question
+async def _get_draft_id(db: AsyncSession) -> uuid.UUID:
+    row = await db.execute(
+        select(QuestionnaireVersion.id).where(QuestionnaireVersion.is_draft.is_(True))
+    )
+    draft_id = row.scalar_one_or_none()
+    if draft_id is None:
+        raise HTTPException(status_code=404, detail="No draft questionnaire version exists")
+    return draft_id
 
 
 def _mint_question_key() -> str:
     # token_urlsafe(6) yields 8 URL-safe characters.
     return f"q_{secrets.token_urlsafe(6)[:8]}"
-
-
-async def _next_question_number(db: AsyncSession, version_id: uuid.UUID) -> int:
-    result = await db.execute(
-        select(func.coalesce(func.max(Question.question_number), 0)).where(
-            Question.version_id == version_id
-        )
-    )
-    return int(result.scalar_one()) + 1
-
-
-async def _next_section_order(db: AsyncSession, version_id: uuid.UUID) -> int:
-    result = await db.execute(
-        select(func.coalesce(func.max(QuestionnaireSection.order), -1)).where(
-            QuestionnaireSection.version_id == version_id
-        )
-    )
-    return int(result.scalar_one()) + 1
-
-
-async def _next_question_order(db: AsyncSession, section_id: uuid.UUID) -> int:
-    result = await db.execute(
-        select(func.coalesce(func.max(Question.order), -1)).where(
-            Question.section_id == section_id
-        )
-    )
-    return int(result.scalar_one()) + 1
 
 
 def _serialize_question(q: Question) -> dict:
@@ -187,7 +119,7 @@ def _serialize_version(version: QuestionnaireVersion) -> dict:
     }
 
 
-def _choice_type(rt: ResponseType) -> bool:
+def _is_choice_type(rt: ResponseType) -> bool:
     return rt in (ResponseType.SINGLE_CHOICE, ResponseType.MULTI_CHOICE)
 
 
@@ -216,13 +148,7 @@ async def get_draft(
     admin: str = Depends(get_admin_user),
     db: AsyncSession = Depends(get_db),
 ) -> QuestionnaireVersionDetail:
-    draft_id_row = await db.execute(
-        select(QuestionnaireVersion.id).where(QuestionnaireVersion.is_draft.is_(True))
-    )
-    draft_id = draft_id_row.scalar_one_or_none()
-    if draft_id is None:
-        raise HTTPException(status_code=404, detail="No draft questionnaire version exists")
-
+    draft_id = await _get_draft_id(db)
     version = await _load_version_detail(db, draft_id)
     if version is None:
         raise HTTPException(status_code=404, detail="Draft questionnaire version not found")
@@ -244,521 +170,329 @@ async def get_version(
 
 
 # ---------------------------------------------------------------------------
-# Section write endpoints (Phase Q3)
+# Batched save
 # ---------------------------------------------------------------------------
 
 
-@router.post("/draft/sections", status_code=201)
-async def create_section(
-    body: SectionCreate,
+@router.post("/draft/save", response_model=SaveDraftResponse)
+async def save_draft(
+    body: SaveDraftBody,
     admin: str = Depends(get_admin_user),
     db: AsyncSession = Depends(get_db),
-):
-    draft_id_row = await db.execute(
-        select(QuestionnaireVersion.id).where(QuestionnaireVersion.is_draft.is_(True))
-    )
-    draft_id = draft_id_row.scalar_one_or_none()
-    if draft_id is None:
-        raise HTTPException(status_code=404, detail="No draft questionnaire version exists")
+) -> SaveDraftResponse:
+    """Reconcile the posted draft state against the DB.
 
-    title = sanitize_text(body.title.strip())
-    if not title:
-        raise HTTPException(status_code=400, detail="Title cannot be empty")
+    Create, update, delete sections / questions / options to match the payload
+    exactly. Atomic — the whole thing runs inside the request's transaction.
+    """
+    draft_id = await _get_draft_id(db)
 
-    order = body.order if body.order is not None else await _next_section_order(db, draft_id)
+    version = await _load_version_detail(db, draft_id)
+    if version is None:
+        raise HTTPException(status_code=404, detail="Draft questionnaire version not found")
 
-    section = QuestionnaireSection(
-        version_id=draft_id,
-        title=title,
-        order=order,
-        is_ai_addendum=body.is_ai_addendum,
-    )
-    db.add(section)
-    await db.flush()
-
-    await log_action(
-        db,
-        actor=admin,
-        actor_type=ActorType.ADMIN,
-        action="questionnaire.draft.section.created",
-        description=f"Section '{title}' created",
-        metadata={
-            "section_id": str(section.id),
-            "title": title,
-            "is_ai_addendum": body.is_ai_addendum,
-            "order": order,
-        },
-    )
-
-    return {
-        "id": section.id,
-        "version_id": section.version_id,
-        "title": section.title,
-        "order": section.order,
-        "is_ai_addendum": section.is_ai_addendum,
-        "questions": [],
+    # Index the existing draft for fast lookup and ownership checks.
+    existing_sections: dict[uuid.UUID, QuestionnaireSection] = {
+        s.id: s for s in version.sections
+    }
+    existing_questions: dict[uuid.UUID, Question] = {
+        q.id: q for s in version.sections for q in s.questions
+    }
+    # Snapshot the options per question into a plain dict *now*, while the
+    # selectinload'd relationships are still loaded. Subsequent flushes /
+    # cascade deletes can invalidate ORM collection state and accessing
+    # `.options` later triggers an async lazy-load that breaks under the
+    # request's greenlet.
+    options_by_question: dict[uuid.UUID, list[QuestionOption]] = {
+        q.id: list(q.options) for q in existing_questions.values()
+    }
+    existing_options: dict[uuid.UUID, QuestionOption] = {
+        o.id: o
+        for opts in options_by_question.values()
+        for o in opts
     }
 
-
-@router.patch("/draft/sections/{section_id}")
-async def update_section(
-    section_id: uuid.UUID,
-    body: SectionUpdate,
-    admin: str = Depends(get_admin_user),
-    db: AsyncSession = Depends(get_db),
-):
-    section = await _load_draft_section(db, section_id)
-
-    changed: dict = {}
-
-    if body.title is not None:
-        new_title = sanitize_text(body.title.strip())
-        if not new_title:
-            raise HTTPException(status_code=400, detail="Title cannot be empty")
-        if new_title != section.title:
-            changed["title"] = {"from": section.title, "to": new_title}
-            section.title = new_title
-
-    if body.is_ai_addendum is not None and body.is_ai_addendum != section.is_ai_addendum:
-        changed["is_ai_addendum"] = {
-            "from": section.is_ai_addendum,
-            "to": body.is_ai_addendum,
-        }
-        section.is_ai_addendum = body.is_ai_addendum
-
-    if body.order is not None and body.order != section.order:
-        changed["order"] = {"from": section.order, "to": body.order}
-        section.order = body.order
-
-    if changed:
-        # If only title changed, describe as rename; otherwise generic "updated".
-        if "title" in changed and len(changed) == 1:
-            desc = f"Section renamed from '{changed['title']['from']}' to '{changed['title']['to']}'"
-            action = "questionnaire.draft.section.renamed"
-        else:
-            desc = f"Section '{section.title}' updated"
-            action = "questionnaire.draft.section.renamed"
-        await log_action(
-            db,
-            actor=admin,
-            actor_type=ActorType.ADMIN,
-            action=action,
-            description=desc,
-            metadata={"section_id": str(section.id), "changed": changed},
-        )
-
-    return {
-        "id": section.id,
-        "version_id": section.version_id,
-        "title": section.title,
-        "order": section.order,
-        "is_ai_addendum": section.is_ai_addendum,
-    }
-
-
-@router.delete("/draft/sections/{section_id}", response_model=SectionDeleteResponse)
-async def delete_section(
-    section_id: uuid.UUID,
-    admin: str = Depends(get_admin_user),
-    db: AsyncSession = Depends(get_db),
-) -> SectionDeleteResponse:
-    section = await _load_draft_section(db, section_id)
-    deleted_count = len(section.questions)
-    title = section.title
-
-    await log_action(
-        db,
-        actor=admin,
-        actor_type=ActorType.ADMIN,
-        action="questionnaire.draft.section.deleted",
-        description=f"Section '{title}' deleted ({deleted_count} questions removed)",
-        metadata={
-            "section_id": str(section_id),
-            "title": title,
-            "deleted_questions": deleted_count,
-        },
-    )
-
-    await db.delete(section)
-    return SectionDeleteResponse(deleted_questions=deleted_count)
-
-
-# ---------------------------------------------------------------------------
-# Question write endpoints (Phase Q3)
-# ---------------------------------------------------------------------------
-
-
-def _normalize_options(options: list[OptionInput]) -> list[tuple[uuid.UUID | None, str]]:
-    out: list[tuple[uuid.UUID | None, str]] = []
-    for opt in options:
-        label = sanitize_text(opt.label.strip())
-        if not label:
-            raise HTTPException(status_code=400, detail="Option label cannot be empty")
-        out.append((opt.id, label))
-    return out
-
-
-@router.post("/draft/questions", status_code=201, response_model=QuestionWriteResponse)
-async def create_question(
-    body: QuestionCreate,
-    admin: str = Depends(get_admin_user),
-    db: AsyncSession = Depends(get_db),
-) -> QuestionWriteResponse:
-    section = await _load_draft_section(db, body.section_id)
-
-    text = sanitize_text(body.question_text.strip())
-    if not text:
-        raise HTTPException(status_code=400, detail="Question text cannot be empty")
-
-    hint = sanitize_text(body.hint_text.strip()) if body.hint_text else None
-    if hint == "":
-        hint = None
-
-    allows_other = body.allows_other if _choice_type(body.response_type) else False
-
-    initial_options: list[tuple[uuid.UUID | None, str]] = []
-    if body.options:
-        if not _choice_type(body.response_type):
+    # Validate ownership: every id referenced in the payload must already
+    # belong to this draft. Foreign ids would otherwise be silently swallowed
+    # by the "else: create new" branches.
+    payload_section_ids = {s.id for s in body.sections if s.id is not None}
+    for sid in payload_section_ids:
+        if sid not in existing_sections:
             raise HTTPException(
                 status_code=400,
-                detail="Options only valid for single/multi choice questions",
+                detail=f"Section {sid} does not belong to the current draft",
             )
-        initial_options = _normalize_options(body.options)
 
-    question_number = await _next_question_number(db, section.version_id)
-    order = await _next_question_order(db, section.id)
+    payload_question_ids: set[uuid.UUID] = set()
+    for s in body.sections:
+        for q in s.questions:
+            if q.id is not None:
+                if q.id not in existing_questions:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Question {q.id} does not belong to the current draft",
+                    )
+                payload_question_ids.add(q.id)
 
-    question = Question(
-        version_id=section.version_id,
-        section_id=section.id,
-        question_number=question_number,
-        question_key=_mint_question_key(),
-        question_text=text,
-        response_type=body.response_type,
-        allows_other=allows_other,
-        hint_text=hint,
-        is_required=body.is_required,
-        order=order,
-    )
-    db.add(question)
-    await db.flush()
-
-    for idx, (_id, label) in enumerate(initial_options):
-        db.add(
-            QuestionOption(
-                question_id=question.id,
-                label=label,
-                order=idx,
-            )
-        )
-    await db.flush()
-    # Re-fetch options to hydrate the relationship for the response payload.
-    await db.refresh(question, attribute_names=["options"])
-
-    await log_action(
-        db,
-        actor=admin,
-        actor_type=ActorType.ADMIN,
-        action="questionnaire.draft.question.created",
-        description=f"Question Q{question_number} created in section '{section.title}'",
-        metadata={
-            "question_id": str(question.id),
-            "question_key": question.question_key,
-            "section_id": str(section.id),
-            "response_type": body.response_type.value,
-            "question_number": question_number,
-        },
-    )
-
-    return QuestionWriteResponse(
-        question=_serialize_question(question),  # type: ignore[arg-type]
-        warnings=[],
-    )
-
-
-@router.patch("/draft/questions/{question_id}", response_model=QuestionWriteResponse)
-async def update_question(
-    question_id: uuid.UUID,
-    body: QuestionUpdate,
-    admin: str = Depends(get_admin_user),
-    db: AsyncSession = Depends(get_db),
-) -> QuestionWriteResponse:
-    question = await _load_draft_question(db, question_id)
-
-    changed: dict = {}
+    summary = SaveDraftSummary()
     warnings: list[str] = []
 
-    if body.section_id is not None and body.section_id != question.section_id:
-        # Moving to another section must also be within the same draft version.
-        new_section = await _load_draft_section(db, body.section_id)
-        changed["section_id"] = {
-            "from": str(question.section_id),
-            "to": str(new_section.id),
-        }
-        question.section_id = new_section.id
-        # Place at end of target section.
-        question.order = await _next_question_order(db, new_section.id)
+    # ---- Deletes first so MAX(question_number) is accurate for new rows ----
+    sections_to_delete = [
+        existing_sections[sid]
+        for sid in existing_sections
+        if sid not in payload_section_ids
+    ]
+    for section in sections_to_delete:
+        # Cascade takes care of questions + options.
+        summary.questions_deleted += len(section.questions)
+        for q in section.questions:
+            summary.options_deleted += len(q.options)
+        summary.sections_deleted += 1
+        await db.delete(section)
 
-    if body.question_text is not None:
-        text = sanitize_text(body.question_text.strip())
-        if not text:
-            raise HTTPException(status_code=400, detail="Question text cannot be empty")
-        if text != question.question_text:
-            changed["question_text"] = {"from": question.question_text, "to": text}
-            question.question_text = text
+    # Questions removed from a surviving section (or moved out and not present
+    # anywhere in the payload) get deleted here.
+    deleted_section_ids = {s.id for s in sections_to_delete}
+    for qid, question in list(existing_questions.items()):
+        if question.section_id in deleted_section_ids:
+            # Already handled by cascade above.
+            continue
+        if qid not in payload_question_ids:
+            summary.questions_deleted += 1
+            summary.options_deleted += len(options_by_question.get(qid, []))
+            await db.delete(question)
 
-    if body.is_required is not None and body.is_required != question.is_required:
-        changed["is_required"] = {"from": question.is_required, "to": body.is_required}
-        question.is_required = body.is_required
+    await db.flush()
 
-    if body.hint_text is not None:
-        new_hint = sanitize_text(body.hint_text.strip()) if body.hint_text else None
-        if new_hint == "":
-            new_hint = None
-        if new_hint != question.hint_text:
-            changed["hint_text"] = {"from": question.hint_text, "to": new_hint}
-            question.hint_text = new_hint
+    # ---- Apply sections: creates, updates, orders --------------------------
+    # We index position in the payload as the canonical `order` value.
+    # Keep a mapping so nested questions can resolve their new section_id
+    # even when the parent section is newly created.
+    section_by_payload_index: dict[int, QuestionnaireSection] = {}
 
-    response_type_changed = False
-    if body.response_type is not None and body.response_type != question.response_type:
-        old_key = question.question_key
-        old_type = question.response_type.value if isinstance(question.response_type, ResponseType) else str(question.response_type)
-        changed["response_type"] = {
-            "from": old_type,
-            "to": body.response_type.value,
-        }
-        question.response_type = body.response_type
-        # Force new key — the question is semantically new for refresh-matching.
-        new_key = _mint_question_key()
-        question.question_key = new_key
-        changed["question_key"] = {"from": old_key, "to": new_key}
-        warnings.append(
-            "Response type changed — a new question_key was minted. "
-            "This question will be treated as new for refresh matching."
-        )
-        response_type_changed = True
+    for s_idx, s_in in enumerate(body.sections):
+        title = sanitize_text(s_in.title.strip())
+        if not title:
+            raise HTTPException(status_code=400, detail="Section title cannot be empty")
 
-    # allows_other only meaningful for choice types — after any response_type
-    # change, re-evaluate compatibility.
-    effective_type = question.response_type
-    if body.allows_other is not None:
-        new_allows = body.allows_other if _choice_type(effective_type) else False
-        if new_allows != question.allows_other:
-            changed["allows_other"] = {"from": question.allows_other, "to": new_allows}
-            question.allows_other = new_allows
-    elif response_type_changed and not _choice_type(effective_type) and question.allows_other:
-        changed["allows_other"] = {"from": True, "to": False}
-        question.allows_other = False
-
-    # Auto-clear options when leaving a choice-type response to non-choice.
-    if response_type_changed and not _choice_type(effective_type) and question.options:
-        for existing in list(question.options):
-            await db.delete(existing)
-        changed["options_cleared"] = True
-
-    # Options: full replacement when provided.
-    if body.options is not None:
-        if not _choice_type(effective_type):
-            if body.options:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Options only valid for single/multi choice questions",
-                )
-            # Type is non-choice and caller sent an empty list — clear any stale
-            # options from a prior choice-type incarnation.
-            for existing in list(question.options):
-                await db.delete(existing)
+        if s_in.id is None:
+            section = QuestionnaireSection(
+                version_id=draft_id,
+                title=title,
+                order=s_idx,
+                is_ai_addendum=s_in.is_ai_addendum,
+            )
+            db.add(section)
+            summary.sections_created += 1
         else:
-            normalized = _normalize_options(body.options)
-            existing_by_id = {opt.id: opt for opt in question.options}
-            kept_ids: set[uuid.UUID] = set()
-            new_list: list[QuestionOption] = []
+            section = existing_sections[s_in.id]
+            edited = False
+            if section.title != title:
+                section.title = title
+                edited = True
+            if section.is_ai_addendum != s_in.is_ai_addendum:
+                section.is_ai_addendum = s_in.is_ai_addendum
+                edited = True
+            if section.order != s_idx:
+                section.order = s_idx
+                edited = True
+            if edited:
+                summary.sections_edited += 1
 
-            for idx, (opt_id, label) in enumerate(normalized):
-                if opt_id is not None and opt_id in existing_by_id:
-                    opt = existing_by_id[opt_id]
-                    opt.label = label
-                    opt.order = idx
-                    kept_ids.add(opt_id)
-                    new_list.append(opt)
-                else:
-                    opt = QuestionOption(
-                        question_id=question.id,
-                        label=label,
-                        order=idx,
+        section_by_payload_index[s_idx] = section
+
+    # Flush so newly-created sections have IDs before we wire up questions.
+    await db.flush()
+
+    # ---- Apply questions ---------------------------------------------------
+    # Resolve a starting question_number for new questions: MAX existing + 1.
+    # Recompute after each new question so we don't collide on the composite
+    # unique index (version_id, question_number).
+    max_row = await db.execute(
+        select(func.coalesce(func.max(Question.question_number), 0)).where(
+            Question.version_id == draft_id
+        )
+    )
+    next_question_number = int(max_row.scalar_one()) + 1
+
+    for s_idx, s_in in enumerate(body.sections):
+        section = section_by_payload_index[s_idx]
+
+        for q_idx, q_in in enumerate(s_in.questions):
+            text = sanitize_text(q_in.question_text.strip())
+            if not text:
+                raise HTTPException(
+                    status_code=400, detail="Question text cannot be empty"
+                )
+
+            hint = sanitize_text(q_in.hint_text.strip()) if q_in.hint_text else None
+            if hint == "":
+                hint = None
+
+            is_choice = _is_choice_type(q_in.response_type)
+            allows_other = q_in.allows_other if is_choice else False
+
+            is_new_question = q_in.id is None
+            if is_new_question:
+                question = Question(
+                    version_id=draft_id,
+                    section_id=section.id,
+                    question_number=next_question_number,
+                    question_key=_mint_question_key(),
+                    question_text=text,
+                    response_type=q_in.response_type,
+                    allows_other=allows_other,
+                    hint_text=hint,
+                    is_required=q_in.is_required,
+                    order=q_idx,
+                )
+                db.add(question)
+                await db.flush()
+                next_question_number += 1
+                summary.questions_created += 1
+                current_options: list[QuestionOption] = []
+            else:
+                question = existing_questions[q_in.id]
+                current_options = options_by_question.get(question.id, [])
+                edited = False
+
+                if question.section_id != section.id:
+                    question.section_id = section.id
+                    edited = True
+                if question.order != q_idx:
+                    question.order = q_idx
+                    edited = True
+                if question.question_text != text:
+                    question.question_text = text
+                    edited = True
+                if question.is_required != q_in.is_required:
+                    question.is_required = q_in.is_required
+                    edited = True
+                if question.hint_text != hint:
+                    question.hint_text = hint
+                    edited = True
+
+                # Response-type change mints a new key (refresh-matching).
+                if question.response_type != q_in.response_type:
+                    question.response_type = q_in.response_type
+                    question.question_key = _mint_question_key()
+                    summary.question_keys_minted += 1
+                    warnings.append(
+                        f"Q{question.question_number}: response type changed — "
+                        "a new question_key was minted. This question will be "
+                        "treated as new for refresh matching."
                     )
-                    db.add(opt)
-                    new_list.append(opt)
+                    edited = True
 
-            for opt_id, opt in existing_by_id.items():
-                if opt_id not in kept_ids:
+                if question.allows_other != allows_other:
+                    question.allows_other = allows_other
+                    edited = True
+
+                if edited:
+                    summary.questions_edited += 1
+
+            # ---- Options ---------------------------------------------------
+            # For non-choice types, any existing options must go.
+            if not is_choice:
+                if current_options:
+                    for opt in current_options:
+                        summary.options_deleted += 1
+                        await db.delete(opt)
+                    await db.flush()
+                continue
+
+            # Choice type: reconcile options against the payload.
+            existing_opt_by_id: dict[uuid.UUID, QuestionOption] = {
+                o.id: o for o in current_options
+            }
+            payload_opt_ids: set[uuid.UUID] = set()
+            for o_idx, o_in in enumerate(q_in.options):
+                label = sanitize_text(o_in.label.strip())
+                if not label:
+                    raise HTTPException(
+                        status_code=400, detail="Option label cannot be empty"
+                    )
+                if o_in.id is None:
+                    db.add(
+                        QuestionOption(
+                            question_id=question.id,
+                            label=label,
+                            order=o_idx,
+                        )
+                    )
+                    summary.options_created += 1
+                else:
+                    opt = existing_opt_by_id.get(o_in.id)
+                    if opt is None or opt.question_id != question.id:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Option {o_in.id} does not belong to question "
+                            f"{question.id}",
+                        )
+                    edited = False
+                    if opt.label != label:
+                        opt.label = label
+                        edited = True
+                    if opt.order != o_idx:
+                        opt.order = o_idx
+                        edited = True
+                    if edited:
+                        summary.options_edited += 1
+                    payload_opt_ids.add(o_in.id)
+
+            # Delete options no longer referenced.
+            for oid, opt in existing_opt_by_id.items():
+                if oid not in payload_opt_ids:
+                    summary.options_deleted += 1
                     await db.delete(opt)
 
             await db.flush()
-            changed["options"] = {
-                "count": len(new_list),
-                "labels": [label for _, label in normalized],
-            }
 
-    # Re-hydrate options collection for the response payload.
+    # ---- Audit + return canonical state -----------------------------------
     await db.flush()
-    await db.refresh(question, attribute_names=["options"])
 
-    if changed:
+    if any(
+        [
+            summary.sections_created,
+            summary.sections_edited,
+            summary.sections_deleted,
+            summary.questions_created,
+            summary.questions_edited,
+            summary.questions_deleted,
+            summary.options_created,
+            summary.options_edited,
+            summary.options_deleted,
+        ]
+    ):
         await log_action(
             db,
             actor=admin,
             actor_type=ActorType.ADMIN,
-            action="questionnaire.draft.question.edited",
-            description=f"Question Q{question.question_number} edited",
-            metadata={
-                "question_id": str(question.id),
-                "question_key": question.question_key,
-                "changed": changed,
-            },
+            action="questionnaire.draft.saved",
+            description=(
+                "Draft saved "
+                f"(sections +{summary.sections_created}/"
+                f"~{summary.sections_edited}/"
+                f"-{summary.sections_deleted}, "
+                f"questions +{summary.questions_created}/"
+                f"~{summary.questions_edited}/"
+                f"-{summary.questions_deleted}, "
+                f"options +{summary.options_created}/"
+                f"~{summary.options_edited}/"
+                f"-{summary.options_deleted})"
+            ),
+            metadata=summary.model_dump(),
         )
 
-    return QuestionWriteResponse(
-        question=_serialize_question(question),  # type: ignore[arg-type]
+    refreshed = await _load_version_detail(db, draft_id)
+    assert refreshed is not None  # we just held a reference
+
+    return SaveDraftResponse(
+        draft=QuestionnaireVersionDetail.model_validate(_serialize_version(refreshed)),
+        summary=summary,
         warnings=warnings,
     )
-
-
-@router.delete("/draft/questions/{question_id}", status_code=204, response_model=None)
-async def delete_question(
-    question_id: uuid.UUID,
-    admin: str = Depends(get_admin_user),
-    db: AsyncSession = Depends(get_db),
-) -> None:
-    question = await _load_draft_question(db, question_id)
-
-    await log_action(
-        db,
-        actor=admin,
-        actor_type=ActorType.ADMIN,
-        action="questionnaire.draft.question.deleted",
-        description=f"Question Q{question.question_number} deleted",
-        metadata={
-            "question_id": str(question.id),
-            "question_key": question.question_key,
-            "question_number": question.question_number,
-            "section_id": str(question.section_id),
-        },
-    )
-
-    await db.delete(question)
-
-
-# ---------------------------------------------------------------------------
-# Reorder endpoint (Phase Q3)
-# ---------------------------------------------------------------------------
-
-
-@router.post("/draft/reorder")
-async def reorder(
-    body: ReorderBody,
-    admin: str = Depends(get_admin_user),
-    db: AsyncSession = Depends(get_db),
-):
-    if not body.section_orders and not body.question_orders:
-        return {"ok": True, "section_count": 0, "question_count": 0}
-
-    # Resolve draft version id once.
-    draft_id_row = await db.execute(
-        select(QuestionnaireVersion.id).where(QuestionnaireVersion.is_draft.is_(True))
-    )
-    draft_id = draft_id_row.scalar_one_or_none()
-    if draft_id is None:
-        raise HTTPException(status_code=404, detail="No draft questionnaire version exists")
-
-    section_count = 0
-    question_count = 0
-
-    if body.section_orders:
-        ids = [item.id for item in body.section_orders]
-        rows = (
-            await db.execute(
-                select(QuestionnaireSection).where(QuestionnaireSection.id.in_(ids))
-            )
-        ).scalars().all()
-        by_id = {row.id: row for row in rows}
-        for item in body.section_orders:
-            section = by_id.get(item.id)
-            if section is None:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Section {item.id} not found",
-                )
-            if section.version_id != draft_id:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Only the draft version can be edited",
-                )
-            section.order = item.order
-            section_count += 1
-
-    if body.question_orders:
-        all_q_ids: list[uuid.UUID] = []
-        for items in body.question_orders.values():
-            all_q_ids.extend(item.id for item in items)
-        if all_q_ids:
-            rows = (
-                await db.execute(select(Question).where(Question.id.in_(all_q_ids)))
-            ).scalars().all()
-            q_by_id = {row.id: row for row in rows}
-            for section_id_key, items in body.question_orders.items():
-                for item in items:
-                    question = q_by_id.get(item.id)
-                    if question is None:
-                        raise HTTPException(
-                            status_code=400,
-                            detail=f"Question {item.id} not found",
-                        )
-                    if question.version_id != draft_id:
-                        raise HTTPException(
-                            status_code=400,
-                            detail="Only the draft version can be edited",
-                        )
-                    # Allow re-homing via reorder: accept either the existing
-                    # section or the key provided.
-                    if question.section_id != section_id_key:
-                        # Verify the target section belongs to the draft too.
-                        target = (
-                            await db.execute(
-                                select(QuestionnaireSection).where(
-                                    QuestionnaireSection.id == section_id_key
-                                )
-                            )
-                        ).scalar_one_or_none()
-                        if target is None or target.version_id != draft_id:
-                            raise HTTPException(
-                                status_code=400,
-                                detail="Target section does not belong to the draft",
-                            )
-                        question.section_id = section_id_key
-                    question.order = item.order
-                    question_count += 1
-
-    await log_action(
-        db,
-        actor=admin,
-        actor_type=ActorType.ADMIN,
-        action="questionnaire.draft.reordered",
-        description=(
-            f"Reorder applied "
-            f"({section_count} sections, {question_count} questions)"
-        ),
-        metadata={
-            "section_count": section_count,
-            "question_count": question_count,
-        },
-    )
-
-    return {
-        "ok": True,
-        "section_count": section_count,
-        "question_count": question_count,
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -771,13 +505,7 @@ async def renumber_draft(
     admin: str = Depends(get_admin_user),
     db: AsyncSession = Depends(get_db),
 ):
-    draft_id_row = await db.execute(
-        select(QuestionnaireVersion.id).where(QuestionnaireVersion.is_draft.is_(True))
-    )
-    draft_id = draft_id_row.scalar_one_or_none()
-    if draft_id is None:
-        raise HTTPException(status_code=404, detail="No draft questionnaire version exists")
-
+    draft_id = await _get_draft_id(db)
     changed_count = await renumber_version(db, draft_id)
 
     await log_action(
