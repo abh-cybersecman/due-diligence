@@ -107,6 +107,43 @@ export default function Questionnaire() {
   const [keyChangeNotice, setKeyChangeNotice] = useState(null)
   const [renumberPrompt, setRenumberPrompt] = useState(false)
   const [renumberNotice, setRenumberNotice] = useState(null)
+  const [dirtyPrompt, setDirtyPrompt] = useState(null)
+  const activeFormRef = useRef(null)
+
+  const registerActiveForm = useCallback((reg) => {
+    activeFormRef.current = reg
+  }, [])
+
+  const guardSwitch = useCallback((proceed) => {
+    const form = activeFormRef.current
+    if (!form || !form.isDirty()) { proceed(); return }
+    setDirtyPrompt({
+      onSave: async () => {
+        try { await form.save() }
+        catch { setDirtyPrompt(null); return }
+        setDirtyPrompt(null)
+        proceed()
+      },
+      onDiscard: () => {
+        form.discard()
+        setDirtyPrompt(null)
+        proceed()
+      },
+      onCancel: () => setDirtyPrompt(null),
+    })
+  }, [])
+
+  // Browser-level unsaved-changes warning.
+  useEffect(() => {
+    function handler(e) {
+      if (activeFormRef.current?.isDirty?.()) {
+        e.preventDefault()
+        e.returnValue = ''
+      }
+    }
+    window.addEventListener('beforeunload', handler)
+    return () => window.removeEventListener('beforeunload', handler)
+  }, [])
 
   const loadDraft = useCallback(async () => {
     try {
@@ -435,14 +472,14 @@ export default function Questionnaire() {
               <button
                 className={`tab-btn${tab === 'standard' ? ' tab-btn--active' : ''}`}
                 style={s.tabBtn}
-                onClick={() => setTab('standard')}
+                onClick={() => guardSwitch(() => setTab('standard'))}
               >
                 Standard
               </button>
               <button
                 className={`tab-btn${tab === 'ai' ? ' tab-btn--active' : ''}`}
                 style={s.tabBtn}
-                onClick={() => setTab('ai')}
+                onClick={() => guardSwitch(() => setTab('ai'))}
               >
                 AI Addendum
               </button>
@@ -451,7 +488,7 @@ export default function Questionnaire() {
             <SectionList
               sections={sectionsForTab}
               activeSectionId={activeSectionId}
-              onSelect={setActiveSectionId}
+              onSelect={(id) => guardSwitch(() => setActiveSectionId(id))}
               onReorder={reorderSections}
               onRename={(id, title) => saveSection(id, { title })}
               onToggleAI={(sec) =>
@@ -464,7 +501,7 @@ export default function Questionnaire() {
               <button
                 className="btn btn-secondary"
                 style={{ width: '100%' }}
-                onClick={() => addSection(tab === 'ai')}
+                onClick={() => guardSwitch(() => addSection(tab === 'ai'))}
               >
                 + Add Section
               </button>
@@ -486,6 +523,8 @@ export default function Questionnaire() {
                 onDeleteQuestion={deleteQuestion}
                 onRequestTypeChange={requestResponseTypeChange}
                 onKeyRegenerated={(q) => setKeyChangeNotice(q)}
+                guardSwitch={guardSwitch}
+                registerActiveForm={registerActiveForm}
               />
             )}
           </main>
@@ -615,6 +654,14 @@ export default function Questionnaire() {
         <Toast
           message={renumberNotice}
           onDismiss={() => setRenumberNotice(null)}
+        />
+      )}
+
+      {dirtyPrompt && (
+        <DirtySwitchPrompt
+          onSave={dirtyPrompt.onSave}
+          onDiscard={dirtyPrompt.onDiscard}
+          onCancel={dirtyPrompt.onCancel}
         />
       )}
     </AdminLayout>
@@ -826,9 +873,15 @@ function SectionEditor({
   onDeleteQuestion,
   onRequestTypeChange,
   onKeyRegenerated,
+  guardSwitch,
+  registerActiveForm,
 }) {
   const [expandedId, setExpandedId] = useState(null)
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }))
+
+  const requestToggle = (qid) => {
+    guardSwitch(() => setExpandedId((id) => (id === qid ? null : qid)))
+  }
   const questions = useMemo(
     () => (section.questions || []).slice().sort((a, b) => a.order - b.order),
     [section.questions]
@@ -872,13 +925,14 @@ function SectionEditor({
                   key={q.id}
                   question={q}
                   expanded={expandedId === q.id}
-                  onToggle={() => setExpandedId((id) => (id === q.id ? null : q.id))}
+                  onToggle={() => requestToggle(q.id)}
                   onSave={onSaveQuestion}
                   onDelete={() => {
                     if (window.confirm(`Delete question Q${q.question_number}?`)) onDeleteQuestion(q.id)
                   }}
                   onRequestTypeChange={onRequestTypeChange}
                   onKeyRegenerated={onKeyRegenerated}
+                  registerActiveForm={registerActiveForm}
                 />
               ))}
             </SortableContext>
@@ -926,6 +980,7 @@ function QuestionCard({
   onDelete,
   onRequestTypeChange,
   onKeyRegenerated,
+  registerActiveForm,
   dragAttributes,
   dragListeners,
 }) {
@@ -977,6 +1032,7 @@ function QuestionCard({
       onDelete={onDelete}
       onRequestTypeChange={onRequestTypeChange}
       onKeyRegenerated={onKeyRegenerated}
+      registerActiveForm={registerActiveForm}
       dragAttributes={dragAttributes}
       dragListeners={dragListeners}
     />
@@ -990,81 +1046,83 @@ function QuestionEditForm({
   onDelete,
   onRequestTypeChange,
   onKeyRegenerated,
+  registerActiveForm,
   dragAttributes,
   dragListeners,
 }) {
-  // Local editable copy. Any edit schedules a debounced save.
+  // Local editable copy. Edits stay local until the user clicks Save.
+  const [original, setOriginal] = useState(question)
   const [local, setLocal] = useState(question)
+  const [dirty, setDirty] = useState(false)
+  const [savedAt, setSavedAt] = useState(null)
   const [showHint, setShowHint] = useState(Boolean(question.hint_text))
-  const timerRef = useRef(null)
 
-  // Reconcile server-side changes that the user didn't type (key regen, number shifts).
+  const dirtyRef = useRef(false)
+  dirtyRef.current = dirty
+
+  // Reconcile server-side identity changes (key regen, number shifts) without
+  // clobbering in-flight local edits.
   useEffect(() => {
     setLocal((prev) => ({
       ...prev,
       question_key: question.question_key,
       question_number: question.question_number,
     }))
+    setOriginal((prev) => ({
+      ...prev,
+      question_key: question.question_key,
+      question_number: question.question_number,
+    }))
   }, [question.question_key, question.question_number])
 
-  const scheduleSave = useCallback((patch, opts = {}) => {
-    if (timerRef.current) clearTimeout(timerRef.current)
-    const delay = opts.immediate ? 0 : 800
-    timerRef.current = setTimeout(() => {
-      onSave(question.id, patch, {
-        onWarnings: (_warnings, serverQ) => onKeyRegenerated?.(serverQ),
-      }).catch(() => {})
-    }, delay)
-  }, [onSave, onKeyRegenerated, question.id])
+  // Auto-clear "Saved just now" after 3s.
+  useEffect(() => {
+    if (!savedAt) return
+    const t = setTimeout(() => setSavedAt(null), 3000)
+    return () => clearTimeout(t)
+  }, [savedAt])
 
-  useEffect(() => () => { if (timerRef.current) clearTimeout(timerRef.current) }, [])
-
-  function updateField(field, value, { immediate = false } = {}) {
-    setLocal((prev) => ({ ...prev, [field]: value }))
-    scheduleSave({ [field]: value }, { immediate })
+  function markDirty(next) {
+    setLocal(next)
+    setDirty(true)
+    setSavedAt(null)
   }
 
-  // Response type change — confirmation modal first.
+  function updateField(field, value) {
+    markDirty({ ...local, [field]: value })
+  }
+
+  // Response type change — confirmation modal first, then update local only.
   function handleResponseTypeChange(newType) {
     onRequestTypeChange(local, newType, (confirmedType) => {
-      // commit() → proceed; commit(null) → user cancelled, leave select at its
-      // previous controlled value.
       if (confirmedType === null) return
-
       const isChoice = CHOICE_TYPES.has(newType)
-      setLocal((prev) => ({
-        ...prev,
+      markDirty({
+        ...local,
         response_type: newType,
-        allows_other: isChoice ? prev.allows_other : false,
-        options: isChoice ? prev.options : [],
-      }))
-      scheduleSave(
-        {
-          response_type: newType,
-          allows_other: isChoice ? local.allows_other : false,
-          options: isChoice ? (local.options || []) : [],
-        },
-        { immediate: true }
-      )
+        allows_other: isChoice ? local.allows_other : false,
+        options: isChoice ? local.options : [],
+      })
     })
   }
 
   function handleOptionChange(idx, label) {
-    const next = local.options.map((o, i) => (i === idx ? { ...o, label } : o))
-    setLocal((prev) => ({ ...prev, options: next }))
-    scheduleSave({ options: next.map((o) => ({ id: o.id, label: o.label })) })
+    markDirty({
+      ...local,
+      options: local.options.map((o, i) => (i === idx ? { ...o, label } : o)),
+    })
   }
 
   function handleAddOption() {
-    const next = [...(local.options || []), { id: null, label: `Option ${(local.options?.length ?? 0) + 1}`, order: (local.options?.length ?? 0) }]
-    setLocal((prev) => ({ ...prev, options: next }))
-    scheduleSave({ options: next.map((o) => ({ id: o.id, label: o.label })) })
+    const len = local.options?.length ?? 0
+    markDirty({
+      ...local,
+      options: [...(local.options || []), { id: null, label: `Option ${len + 1}`, order: len }],
+    })
   }
 
   function handleDeleteOption(idx) {
-    const next = local.options.filter((_, i) => i !== idx)
-    setLocal((prev) => ({ ...prev, options: next }))
-    scheduleSave({ options: next.map((o) => ({ id: o.id, label: o.label })) }, { immediate: true })
+    markDirty({ ...local, options: local.options.filter((_, i) => i !== idx) })
   }
 
   function handleOptionDragEnd(event) {
@@ -1073,10 +1131,65 @@ function QuestionEditForm({
     const oldIndex = local.options.findIndex((o) => optionKey(o) === active.id)
     const newIndex = local.options.findIndex((o) => optionKey(o) === over.id)
     if (oldIndex === -1 || newIndex === -1) return
-    const next = arrayMove(local.options, oldIndex, newIndex)
-    setLocal((prev) => ({ ...prev, options: next }))
-    scheduleSave({ options: next.map((o) => ({ id: o.id, label: o.label })) }, { immediate: true })
+    markDirty({ ...local, options: arrayMove(local.options, oldIndex, newIndex) })
   }
+
+  const handleSave = useCallback(async () => {
+    if (!dirtyRef.current) return
+    const isChoice = CHOICE_TYPES.has(local.response_type)
+    const patch = {
+      question_text: local.question_text,
+      response_type: local.response_type,
+      is_required: local.is_required,
+      allows_other: isChoice ? local.allows_other : false,
+      hint_text: local.hint_text && local.hint_text.length ? local.hint_text : null,
+      ...(isChoice
+        ? { options: (local.options || []).map((o) => ({ id: o.id, label: o.label })) }
+        : {}),
+    }
+    const payload = await onSave(question.id, patch, {
+      onWarnings: (_w, serverQ) => onKeyRegenerated?.(serverQ),
+    })
+    const saved = payload?.question || local
+    setLocal(saved)
+    setOriginal(saved)
+    setDirty(false)
+    setSavedAt(Date.now())
+  }, [local, onSave, question.id, onKeyRegenerated])
+
+  const handleCancel = useCallback(() => {
+    setLocal(original)
+    setDirty(false)
+    setSavedAt(null)
+    setShowHint(Boolean(original.hint_text))
+  }, [original])
+
+  // Stable wrappers so the registration effect only runs once on mount.
+  const saveRef = useRef(handleSave)
+  const cancelRef = useRef(handleCancel)
+  saveRef.current = handleSave
+  cancelRef.current = handleCancel
+
+  useEffect(() => {
+    registerActiveForm({
+      isDirty: () => dirtyRef.current,
+      save: () => saveRef.current(),
+      discard: () => cancelRef.current(),
+    })
+    return () => registerActiveForm(null)
+  }, [registerActiveForm])
+
+  // Cmd/Ctrl+S saves the current form (only one edit form is mounted at a time).
+  useEffect(() => {
+    function onKey(e) {
+      if ((e.metaKey || e.ctrlKey) && (e.key === 's' || e.key === 'S')) {
+        e.preventDefault()
+        saveRef.current()
+      }
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [])
 
   const isChoice = CHOICE_TYPES.has(local.response_type)
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }))
@@ -1140,7 +1253,7 @@ function QuestionEditForm({
           <input
             type="checkbox"
             checked={local.is_required}
-            onChange={(e) => updateField('is_required', e.target.checked, { immediate: true })}
+            onChange={(e) => updateField('is_required', e.target.checked)}
           />
           Required
         </label>
@@ -1206,12 +1319,43 @@ function QuestionEditForm({
             <input
               type="checkbox"
               checked={local.allows_other}
-              onChange={(e) => updateField('allows_other', e.target.checked, { immediate: true })}
+              onChange={(e) => updateField('allows_other', e.target.checked)}
             />
             Allow "Other" response
           </label>
         </div>
       )}
+
+      <div style={s.editFooter}>
+        <span
+          style={{
+            ...s.footerIndicator,
+            color: dirty
+              ? 'var(--status-risk-pending)'
+              : savedAt
+                ? 'var(--risk-low)'
+                : 'var(--text-muted)',
+          }}
+        >
+          {dirty ? 'Unsaved changes' : savedAt ? '✓ Saved just now' : ''}
+        </span>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+          <button
+            className="btn btn-secondary"
+            onClick={handleCancel}
+            disabled={!dirty}
+          >
+            Cancel
+          </button>
+          <button
+            className="btn btn-primary"
+            onClick={handleSave}
+            disabled={!dirty}
+          >
+            Save
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
@@ -1268,6 +1412,24 @@ function ConfirmModal({ title, body, confirmLabel, onConfirm, onCancel }) {
         <div style={s.modalActions}>
           <button className="btn btn-secondary" onClick={onCancel}>Cancel</button>
           <button className="btn btn-primary" onClick={onConfirm}>{confirmLabel}</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function DirtySwitchPrompt({ onSave, onDiscard, onCancel }) {
+  return (
+    <div style={s.modalOverlay} onClick={onCancel}>
+      <div className="card" style={s.modalCard} onClick={(e) => e.stopPropagation()}>
+        <h3 style={s.modalTitle}>Unsaved changes</h3>
+        <div style={s.modalBody}>
+          You have unsaved changes in this question. Save them, discard, or cancel?
+        </div>
+        <div style={s.modalActions}>
+          <button className="btn btn-secondary" onClick={onCancel}>Cancel</button>
+          <button className="btn btn-secondary" onClick={onDiscard}>Discard</button>
+          <button className="btn btn-primary" onClick={onSave}>Save</button>
         </div>
       </div>
     </div>
@@ -1450,6 +1612,15 @@ const s = {
   editHeader: {
     display: 'flex', alignItems: 'center', gap: 8,
     flexWrap: 'wrap',
+  },
+  editFooter: {
+    display: 'flex', alignItems: 'center', gap: 12,
+    marginTop: 4, paddingTop: 12,
+    borderTop: '1px solid var(--border)',
+  },
+  footerIndicator: {
+    fontSize: 'var(--text-xs)',
+    fontWeight: 500,
   },
   questionHeader: {
     display: 'flex', gap: 8, alignItems: 'flex-start',
