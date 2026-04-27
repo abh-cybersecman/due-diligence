@@ -2049,11 +2049,24 @@ function VersionHistoryPanel({ versions, open, onToggle }) {
 function VersionRow({ version }) {
   const [expanded, setExpanded] = useState(false)
   const changelog = version.changelog || ''
-  const truncated = changelog.length > 100
-  const displayed = !expanded && truncated ? `${changelog.slice(0, 100)}…` : changelog
+  const PREVIEW_LEN = 60
+  const truncated = changelog.length > PREVIEW_LEN
+  const previewText = truncated ? `${changelog.slice(0, PREVIEW_LEN)}…` : changelog
 
   return (
-    <div style={s.versionRow}>
+    <div
+      style={{ ...s.versionRow, cursor: 'pointer' }}
+      onClick={() => setExpanded((v) => !v)}
+      role="button"
+      aria-expanded={expanded}
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          setExpanded((v) => !v)
+        }
+      }}
+    >
       <div style={s.versionRowHeader}>
         <span style={s.versionLabelMono}>{version.version_label}</span>
         {version.is_current && (
@@ -2062,17 +2075,22 @@ function VersionRow({ version }) {
         <span style={s.versionDate}>
           {version.published_at ? formatTimestamp(version.published_at) : '—'}
         </span>
-      </div>
-      {changelog && (
-        <div
+        <span
           style={{
-            ...s.versionChangelog,
-            cursor: truncated ? 'pointer' : 'default',
+            ...s.versionChevron,
+            transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)',
           }}
-          onClick={() => truncated && setExpanded((v) => !v)}
-          title={truncated ? 'Click to toggle' : undefined}
+          aria-hidden="true"
         >
-          {displayed}
+          ▸
+        </span>
+      </div>
+      {changelog && !expanded && (
+        <div style={s.versionChangelog}>{previewText}</div>
+      )}
+      {changelog && expanded && (
+        <div style={{ ...s.versionChangelog, whiteSpace: 'pre-wrap' }}>
+          {changelog}
         </div>
       )}
     </div>
@@ -2426,13 +2444,15 @@ const s = {
     padding: 0, lineHeight: 1,
   },
 
-  // Publish modal
+  // Publish modal — single scroll context: the modal card itself. Inner
+  // sections (header, body, form) stack normally and grow to fit their
+  // content; nothing inside has its own overflow.
   publishModalCard: {
     width: 'min(860px, 94vw)',
     maxHeight: '90vh',
     display: 'flex', flexDirection: 'column',
     padding: 0,
-    overflow: 'hidden',
+    overflow: 'auto',
   },
   publishHeader: {
     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -2449,8 +2469,6 @@ const s = {
   publishVersionTo: { color: 'var(--accent)', fontWeight: 600 },
   publishBody: {
     padding: '12px 20px',
-    overflow: 'auto',
-    flex: 1,
     display: 'flex', flexDirection: 'column', gap: 10,
   },
   publishForm: {
@@ -2655,5 +2673,13 @@ const s = {
     fontSize: 'var(--text-xs)', color: 'var(--text-secondary)',
     lineHeight: 1.5,
     wordBreak: 'break-word',
+  },
+  versionChevron: {
+    fontSize: 'var(--text-xs)',
+    color: 'var(--text-muted)',
+    transition: 'transform 150ms ease',
+    display: 'inline-block',
+    marginLeft: 6,
+    width: 10,
   },
 }
