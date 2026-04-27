@@ -113,6 +113,7 @@ async def clone_version_contents(
                 section_id=new_section.id,
                 question_number=question.question_number,
                 question_key=question.question_key,
+                previous_question_key=question.previous_question_key,
                 question_text=question.question_text,
                 response_type=question.response_type,
                 allows_other=question.allows_other,

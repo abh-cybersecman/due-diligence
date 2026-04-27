@@ -383,6 +383,10 @@ async def save_draft(
                 if question.response_type != q_in.response_type:
                     old_key = question.question_key
                     question.response_type = q_in.response_type
+                    # Record the prior key on the row itself so the publish diff
+                    # can pair the add/remove halves precisely, even when the
+                    # admin also edited question_text in the same save.
+                    question.previous_question_key = old_key
                     question.question_key = _mint_question_key()
                     summary.question_keys_minted += 1
                     response_type_change_mints.append({
@@ -641,6 +645,7 @@ def _compute_diff(
                     }
                 )
 
+    removed_snapshots: dict[str, dict] = {}
     for key, (ps, pq) in pub_q.items():
         if key not in draft_q:
             removed_questions.append(
@@ -650,6 +655,43 @@ def _compute_diff(
                     "section_title": ps.title,
                 }
             )
+            removed_snapshots[key] = _question_snapshot(pq)
+
+    # --- Pair up response_type-mint edits via previous_question_key ----------
+    # When admin changes a question's response_type, the save endpoint stamps
+    # the prior key onto `previous_question_key` AND mints a fresh key. The
+    # buckets above see that as an add+remove pair; rejoin them precisely by
+    # walking the draft row's `previous_question_key`. This holds even when
+    # the admin edited question_text in the same save (which would defeat any
+    # text-based heuristic).
+    if added_questions and removed_questions:
+        removed_index_by_key: dict[str, int] = {
+            r["question_key"]: i for i, r in enumerate(removed_questions)
+        }
+        used_removed: set[int] = set()
+        kept_added: list[dict] = []
+        for added in added_questions:
+            added_key = added["question_key"]
+            _, draft_question = draft_q[added_key]
+            prev_key = draft_question.previous_question_key
+            ri = removed_index_by_key.get(prev_key) if prev_key else None
+            if ri is None or ri in used_removed:
+                kept_added.append(added)
+                continue
+            used_removed.add(ri)
+            ds, _ = draft_q[added_key]
+            edited_questions.append(
+                {
+                    "question_key": added_key,
+                    "section_title": ds.title,
+                    "before": removed_snapshots[prev_key],
+                    "after": _question_snapshot(draft_question),
+                }
+            )
+        added_questions = kept_added
+        removed_questions = [
+            r for ri, r in enumerate(removed_questions) if ri not in used_removed
+        ]
 
     # --- Non-sequential question-number detection ---
     all_numbers = [q.question_number for s in draft_sections for q in s.questions]

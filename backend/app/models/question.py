@@ -39,6 +39,7 @@ class Question(Base):
     )
     question_number: Mapped[int] = mapped_column(Integer, nullable=False)
     question_key: Mapped[str] = mapped_column(String(100), nullable=False)
+    previous_question_key: Mapped[str | None] = mapped_column(Text, nullable=True)
     question_text: Mapped[str] = mapped_column(Text, nullable=False)
     response_type: Mapped[ResponseType] = mapped_column(
         SAEnum(ResponseType, name="responsetype"),
