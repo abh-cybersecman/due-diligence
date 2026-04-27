@@ -22,21 +22,30 @@ function formatBytes(bytes) {
 const STATUS_LABELS = {
   DRAFT: 'Draft',
   FUNCTIONAL_EVALUATION_PENDING: 'Awaiting Documents',
+  PENDING_DISPATCH: 'Awaiting Dispatch',
   DD_IN_PROGRESS: 'In Progress',
   RISK_ASSESSMENT_PENDING: 'Submitted',
   UNDER_REVIEW: 'Under Review',
   CLOSED: 'Closed',
   PENDING_CLOSURE: 'Pending Closure',
-  UNDER_REVIEW: 'Under Review',
 }
 
 const STATUS_COLORS = {
+  DRAFT: 'var(--status-draft)',
+  FUNCTIONAL_EVALUATION_PENDING: 'var(--status-ir-pending)',
+  PENDING_DISPATCH: 'var(--status-dd-sent)',
   DD_IN_PROGRESS: 'var(--status-dd-progress)',
   RISK_ASSESSMENT_PENDING: 'var(--status-risk-pending)',
   CLOSED: 'var(--status-closed)',
   PENDING_CLOSURE: 'var(--status-closed-pending)',
   UNDER_REVIEW: 'var(--status-under-review)',
 }
+
+const PRE_DISPATCH_STATUSES = new Set([
+  'DRAFT',
+  'FUNCTIONAL_EVALUATION_PENDING',
+  'PENDING_DISPATCH',
+])
 
 const EDITABLE_STATUSES = new Set(['DD_IN_PROGRESS', 'UNDER_REVIEW'])
 const SUBMIT_STATUSES = new Set(['DD_IN_PROGRESS'])
@@ -606,6 +615,8 @@ export default function VendorQuestionnaire({
             <div style={s.readOnlyNotice}>
               {meta?.status === 'RISK_ASSESSMENT_PENDING'
                 ? 'This questionnaire has been submitted and is under review. No further changes can be made.'
+                : PRE_DISPATCH_STATUSES.has(meta?.status)
+                ? 'This questionnaire has not yet been dispatched. You will be notified by the Albatha Information Security Team once it is ready for you to complete.'
                 : 'This questionnaire is currently read-only.'}
             </div>
           )}
