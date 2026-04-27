@@ -10,8 +10,16 @@ from app.models.audit_log import ActorType
 from app.models.engagement import Engagement, EngagementStatus
 from app.models.file_upload import FileType, FileUpload
 from app.models.question import Question
+from app.models.questionnaire_section import QuestionnaireSection
+from app.models.questionnaire_version import QuestionnaireVersion
 from app.models.response import Response
-from app.schemas.engagement import EngagementStatusOut, IRDocumentOut, ResponseDetail
+from app.schemas.engagement import (
+    EngagementResponsesPayload,
+    EngagementStatusOut,
+    IRDocumentOut,
+    ResponseEntry,
+)
+from app.schemas.questionnaire import QuestionnaireSectionSchema
 from app.services.audit import log_action
 from app.services.auth import get_ir_user
 from app.services.files import delete_ir_file, store_ir_file
@@ -63,7 +71,7 @@ async def get_status(engagement: Engagement = Depends(_get_engagement_for_ir)):
     )
 
 
-@router.get("/{token}/responses", response_model=list[ResponseDetail])
+@router.get("/{token}/responses", response_model=EngagementResponsesPayload)
 async def get_responses(
     token: str,
     ir_user: dict = Depends(get_ir_user),
@@ -71,27 +79,35 @@ async def get_responses(
 ):
     engagement = await _get_engagement_for_ir(token, ir_user, db)
 
-    result = await db.execute(
-        select(Response)
-        .where(Response.engagement_id == engagement.id)
-        .options(selectinload(Response.question).selectinload(Question.section))
-    )
-    responses = result.scalars().all()
-
-    return [
-        ResponseDetail(
-            id=r.id,
-            question_id=r.question_id,
-            question_number=r.question.question_number,
-            section=r.question.section.title,
-            question_text=r.question.question_text,
-            response_text=r.response_text,
-            selected_options=r.selected_options,
-            updated_at=r.updated_at,
+    version = (
+        await db.execute(
+            select(QuestionnaireVersion).where(
+                QuestionnaireVersion.id == engagement.questionnaire_version_id
+            )
         )
-        for r in responses
-        if r.question
-    ]
+    ).scalar_one()
+
+    sec_result = await db.execute(
+        select(QuestionnaireSection)
+        .where(QuestionnaireSection.version_id == engagement.questionnaire_version_id)
+        .options(selectinload(QuestionnaireSection.questions).selectinload(Question.options))
+        .order_by(QuestionnaireSection.order)
+    )
+    sections = sec_result.scalars().all()
+
+    r_result = await db.execute(
+        select(Response).where(Response.engagement_id == engagement.id)
+    )
+    responses = r_result.scalars().all()
+
+    return EngagementResponsesPayload(
+        engagement_id=engagement.id,
+        questionnaire_version_id=version.id,
+        version_label=version.version_label,
+        is_ai_application=engagement.is_ai_application,
+        sections=[QuestionnaireSectionSchema.model_validate(s) for s in sections],
+        responses=[ResponseEntry.model_validate(r) for r in responses],
+    )
 
 
 @router.post("/{token}/files", response_model=IRDocumentOut, status_code=201)

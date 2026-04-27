@@ -259,8 +259,39 @@ const uploadZoneStyles = {
 
 // ─── VendorResponsesTab ──────────────────────────────────────────────────────
 
-function VendorResponsesTab({ token, accessToken, onLogout, isAiApplication }) {
-  const [responses, setResponses] = useState(null)
+function renderChoiceAnswer(question, response) {
+  const opts = response?.selected_options || []
+  if (!opts.length) return null
+  const otherText = (response?.other_text || '').trim()
+  return opts.map((opt) => {
+    if (opt === '__other__') return otherText ? `Other — ${otherText}` : 'Other'
+    return opt
+  }).join(', ')
+}
+
+function ResponseAnswer({ question, response }) {
+  if (!response) {
+    return <div style={rvStyles.noAnswer}>No answer entered</div>
+  }
+  if (question.response_type === 'TEXT') {
+    return response.response_text
+      ? <div style={rvStyles.answer}>{response.response_text}</div>
+      : <div style={rvStyles.noAnswer}>No answer entered</div>
+  }
+  if (question.response_type === 'SINGLE_CHOICE' || question.response_type === 'MULTI_CHOICE') {
+    const text = renderChoiceAnswer(question, response)
+    return text
+      ? <div style={rvStyles.answer}>{text}</div>
+      : <div style={rvStyles.noAnswer}>No answer entered</div>
+  }
+  if (question.response_type === 'FILE_UPLOAD') {
+    return <div style={rvStyles.noAnswer}>See attached files</div>
+  }
+  return <div style={rvStyles.noAnswer}>No answer entered</div>
+}
+
+function VendorResponsesTab({ token, accessToken, onLogout }) {
+  const [payload, setPayload] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
@@ -270,7 +301,7 @@ function VendorResponsesTab({ token, accessToken, onLogout, isAiApplication }) {
       if (res.status === 401 || res.status === 403) { onLogout(); return }
       if (!res.ok) throw new Error('Failed to load responses')
       const data = await res.json()
-      setResponses(data)
+      setPayload(data)
     } catch (err) {
       setError(err.message)
     } finally {
@@ -286,72 +317,78 @@ function VendorResponsesTab({ token, accessToken, onLogout, isAiApplication }) {
   if (error) {
     return <div style={{ ...rvStyles.placeholder, color: 'var(--risk-high)' }}>{error}</div>
   }
-  const totalQuestions = isAiApplication ? 43 : 30
-  const answeredCount = responses ? responses.length : 0
-  const pct = Math.round((answeredCount / totalQuestions) * 100)
+  if (!payload) return null
 
-  if (!responses || responses.length === 0) {
+  const responseMap = {}
+  for (const r of payload.responses) responseMap[r.question_id] = r
+
+  const sortedSections = [...(payload.sections || [])].sort((a, b) => a.order - b.order)
+  const visibleSections = sortedSections.filter((s) => !s.is_ai_addendum || payload.is_ai_application)
+
+  const allQuestions = visibleSections.flatMap((s) => s.questions || [])
+  const totalQuestions = allQuestions.length
+  const answeredCount = allQuestions.filter((q) => {
+    const r = responseMap[q.id]
+    if (!r) return false
+    if (r.response_text && r.response_text.trim()) return true
+    if (r.selected_options && r.selected_options.length > 0) return true
+    return false
+  }).length
+  const pct = totalQuestions > 0 ? Math.round((answeredCount / totalQuestions) * 100) : 0
+
+  if (totalQuestions === 0) {
     return (
-      <>
-        <div style={rvStyles.progressBar}>
-          <span style={rvStyles.progressLabel}>0 of {totalQuestions} questions answered</span>
-          <div style={rvStyles.progressTrack}><div style={{ ...rvStyles.progressFill, width: '0%' }} /></div>
-        </div>
-        <div className="card" style={{ padding: '32px 24px', textAlign: 'center' }}>
-          <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-muted)', margin: 0 }}>
-            No responses yet — the vendor has not entered any answers.
-          </p>
-        </div>
-      </>
+      <div className="card" style={{ padding: '32px 24px', textAlign: 'center' }}>
+        <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-muted)', margin: 0 }}>
+          No questions in this questionnaire version.
+        </p>
+      </div>
     )
-  }
-
-  // Group by section, preserving order
-  const sections = []
-  const sectionMap = {}
-  for (const r of responses) {
-    if (!sectionMap[r.section]) {
-      sectionMap[r.section] = []
-      sections.push(r.section)
-    }
-    sectionMap[r.section].push(r)
   }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       <div style={rvStyles.progressBar}>
-        <span style={rvStyles.progressLabel}>{answeredCount} of {totalQuestions} questions answered</span>
+        <span style={rvStyles.progressLabel}>
+          {answeredCount} of {totalQuestions} questions answered
+          <span style={{ marginLeft: 10, color: 'var(--text-muted)' }}>· {payload.version_label}</span>
+        </span>
         <div style={rvStyles.progressTrack}><div style={{ ...rvStyles.progressFill, width: `${pct}%` }} /></div>
       </div>
-      {sections.map((section) => (
-        <div key={section} className="card" style={{ padding: 0, overflow: 'hidden' }}>
-          <div style={rvStyles.sectionHeader}>{section}</div>
-          <div style={{ display: 'flex', flexDirection: 'column' }}>
-            {sectionMap[section].map((r, idx) => (
-              <div
-                key={r.id}
-                style={{
-                  ...rvStyles.row,
-                  background: idx % 2 === 0 ? 'var(--bg-surface)' : 'var(--bg-subtle)',
-                }}
-              >
-                <div style={rvStyles.qNum}>Q{r.question_number}</div>
-                <div style={rvStyles.qBody}>
-                  <div style={rvStyles.qText}>{r.question_text}</div>
-                  {r.response_text ? (
-                    <div style={rvStyles.answer}>{r.response_text}</div>
-                  ) : r.selected_options && r.selected_options.length > 0 ? (
-                    <div style={rvStyles.answer}>{r.selected_options.join(', ')}</div>
-                  ) : (
-                    <div style={rvStyles.noAnswer}>No answer entered</div>
-                  )}
-                  <div style={rvStyles.meta}>Last updated {formatDate(r.updated_at)}</div>
-                </div>
-              </div>
-            ))}
+      {visibleSections.map((section) => {
+        const qs = [...(section.questions || [])].sort((a, b) => a.order - b.order)
+        if (qs.length === 0) return null
+        return (
+          <div key={section.id} className="card" style={{ padding: 0, overflow: 'hidden' }}>
+            <div style={rvStyles.sectionHeader}>
+              {section.is_ai_addendum ? `${section.title} · AI Addendum` : section.title}
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              {qs.map((q, idx) => {
+                const r = responseMap[q.id]
+                return (
+                  <div
+                    key={q.id}
+                    style={{
+                      ...rvStyles.row,
+                      background: idx % 2 === 0 ? 'var(--bg-surface)' : 'var(--bg-subtle)',
+                    }}
+                  >
+                    <div style={rvStyles.qNum}>Q{q.question_number}</div>
+                    <div style={rvStyles.qBody}>
+                      <div style={rvStyles.qText}>{q.question_text}</div>
+                      <ResponseAnswer question={q} response={r} />
+                      {r && (
+                        <div style={rvStyles.meta}>Last updated {formatDate(r.updated_at)}</div>
+                      )}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
           </div>
-        </div>
-      ))}
+        )
+      })}
     </div>
   )
 }
@@ -692,7 +729,6 @@ function PortalContent({ token, session, onLogout }) {
               token={token}
               accessToken={session.accessToken}
               onLogout={onLogout}
-              isAiApplication={engagement?.is_ai_application}
             />
           )}
 

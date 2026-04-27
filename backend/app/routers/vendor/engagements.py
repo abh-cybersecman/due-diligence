@@ -22,10 +22,12 @@ from app.models.audit_log import ActorType
 from app.models.engagement import Engagement, EngagementStatus
 from app.models.file_upload import FileType, FileUpload
 from app.models.question import Question
+from app.models.questionnaire_section import QuestionnaireSection
+from app.models.questionnaire_version import QuestionnaireVersion
 from app.models.response import Response
+from app.schemas.questionnaire import QuestionnaireSectionSchema
 from app.schemas.vendor import (
     EngagementFormOut,
-    QuestionOut,
     ResponseBatch,
     ResponseOut,
     SubmitOut,
@@ -85,13 +87,21 @@ async def get_form_metadata(
 ) -> EngagementFormOut:
     engagement, _ = auth
 
-    q_result = await db.execute(
-        select(Question)
-        .where(Question.version_id == engagement.questionnaire_version_id)
-        .options(selectinload(Question.section))
-        .order_by(Question.order)
+    version = (
+        await db.execute(
+            select(QuestionnaireVersion).where(
+                QuestionnaireVersion.id == engagement.questionnaire_version_id
+            )
+        )
+    ).scalar_one()
+
+    sec_result = await db.execute(
+        select(QuestionnaireSection)
+        .where(QuestionnaireSection.version_id == engagement.questionnaire_version_id)
+        .options(selectinload(QuestionnaireSection.questions).selectinload(Question.options))
+        .order_by(QuestionnaireSection.order)
     )
-    questions = q_result.scalars().all()
+    sections = sec_result.scalars().all()
 
     f_result = await db.execute(
         select(FileUpload).where(
@@ -106,19 +116,9 @@ async def get_form_metadata(
         application_name=engagement.application_name,
         status=engagement.status.value,
         is_ai_application=engagement.is_ai_application,
-        questions=[
-            QuestionOut(
-                id=q.id,
-                question_number=q.question_number,
-                section=q.section.title,
-                question_text=q.question_text,
-                response_type=q.response_type.value,
-                is_ai_addendum=q.section.is_ai_addendum,
-                is_required=q.is_required,
-                order=q.order,
-            )
-            for q in questions
-        ],
+        questionnaire_version_id=version.id,
+        version_label=version.version_label,
+        sections=[QuestionnaireSectionSchema.model_validate(s) for s in sections],
         files=[VendorFileOut.model_validate(f) for f in files],
     )
 
@@ -158,10 +158,32 @@ async def save_responses(
             detail="Questionnaire is read-only at the current engagement status",
         )
 
+    if not body.responses:
+        return []
+
+    # Validate every question_id belongs to the engagement's pinned version.
+    q_ids = {item.question_id for item in body.responses}
+    version_q_rows = (
+        await db.execute(
+            select(Question.id).where(
+                Question.version_id == engagement.questionnaire_version_id,
+                Question.id.in_(q_ids),
+            )
+        )
+    ).all()
+    valid_ids = {row[0] for row in version_q_rows}
+    invalid = [str(qid) for qid in q_ids if qid not in valid_ids]
+    if invalid:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Question(s) do not belong to this engagement's questionnaire version: {', '.join(invalid)}",
+        )
+
     saved: list[Response] = []
 
     for item in body.responses:
         sanitised = sanitize_text(item.response_text)
+        sanitised_other = sanitize_text(item.other_text)
 
         result = await db.execute(
             select(Response).where(
@@ -174,6 +196,7 @@ async def save_responses(
         if existing:
             existing.response_text = sanitised
             existing.selected_options = item.selected_options
+            existing.other_text = sanitised_other
             existing.updated_at = datetime.now(timezone.utc)
             saved.append(existing)
         else:
@@ -182,6 +205,7 @@ async def save_responses(
                 question_id=item.question_id,
                 response_text=sanitised,
                 selected_options=item.selected_options,
+                other_text=sanitised_other,
                 updated_at=datetime.now(timezone.utc),
             )
             db.add(new_r)

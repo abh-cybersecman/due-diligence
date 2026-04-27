@@ -29,36 +29,16 @@ export default function QuestionnairePreview() {
   const previewMeta = useMemo(() => {
     if (!draft) return null
 
-    // Flatten draft sections → questions into the shape VendorQuestionnaire expects.
-    // Vendor form groups by `section` (string) and splits on `is_ai_addendum`.
-    const sortedSections = [...draft.sections].sort((a, b) => a.order - b.order)
-
-    const questions = []
-    for (const section of sortedSections) {
-      const sortedQs = [...(section.questions || [])].sort((a, b) => a.order - b.order)
-      for (const q of sortedQs) {
-        questions.push({
-          id: q.id,
-          question_number: q.question_number,
-          section: section.title,
-          question_text: q.question_text,
-          response_type: q.response_type,
-          is_ai_addendum: section.is_ai_addendum,
-          is_required: q.is_required,
-          order: q.order,
-        })
-      }
-    }
-
-    const hasAISection = sortedSections.some((s) => s.is_ai_addendum)
+    const hasAISection = (draft.sections || []).some((s) => s.is_ai_addendum)
 
     return {
       id: 'preview',
       application_name: 'Draft preview',
+      questionnaire_version_id: draft.id,
       version_label: draft.version_label,
       status: 'DD_IN_PROGRESS', // visually matches the editable-state render
       is_ai_application: hasAISection,
-      questions,
+      sections: draft.sections || [],
       files: [],
     }
   }, [draft])

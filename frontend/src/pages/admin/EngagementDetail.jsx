@@ -901,55 +901,96 @@ function RiskItemRow({ item, idx, disabled, assignees, onChange, onRemove }) {
 
 // ── Responses tab ─────────────────────────────────────────────────────────────
 
+function renderAdminAnswer(question, response) {
+  if (!response) return null
+  if (question.response_type === 'TEXT') {
+    return response.response_text || null
+  }
+  if (question.response_type === 'SINGLE_CHOICE' || question.response_type === 'MULTI_CHOICE') {
+    const opts = response.selected_options || []
+    if (!opts.length) return null
+    const otherText = (response.other_text || '').trim()
+    return opts.map((opt) => {
+      if (opt === '__other__') return otherText ? `Other — ${otherText}` : 'Other'
+      return opt
+    }).join(', ')
+  }
+  if (question.response_type === 'FILE_UPLOAD') {
+    return null
+  }
+  return null
+}
+
 function ResponsesTab({ engagementId, apiFetch }) {
-  const [responses, setResponses] = useState([])
+  const [payload, setPayload] = useState(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     apiFetch(`/api/admin/engagements/${engagementId}/responses`)
-      .then(r => r.ok ? r.json() : [])
-      .then(data => { setResponses(data); setLoading(false) })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => { setPayload(data); setLoading(false) })
   }, [apiFetch, engagementId])
 
   if (loading) return <div style={{ padding: 24, color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>Loading…</div>
 
-  if (responses.length === 0) {
+  if (!payload) {
     return (
       <div style={s.tabContent}>
         <div style={{ padding: '48px 0', textAlign: 'center', color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>
-          No questionnaire responses yet.
+          Could not load responses.
         </div>
       </div>
     )
   }
 
-  // Group by section
-  const sections = {}
-  const order = []
-  for (const r of responses) {
-    if (!sections[r.section]) { sections[r.section] = []; order.push(r.section) }
-    sections[r.section].push(r)
+  const responseMap = {}
+  for (const r of payload.responses || []) responseMap[r.question_id] = r
+
+  const sortedSections = [...(payload.sections || [])].sort((a, b) => a.order - b.order)
+  const visibleSections = sortedSections.filter((s) => !s.is_ai_addendum || payload.is_ai_application)
+
+  if (visibleSections.length === 0) {
+    return (
+      <div style={s.tabContent}>
+        <div style={{ padding: '48px 0', textAlign: 'center', color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>
+          No questions in this questionnaire version.
+        </div>
+      </div>
+    )
   }
 
   return (
     <div style={s.tabContent}>
-      {order.map(section => (
-        <div key={section} className="card" style={{ ...s.panel, marginBottom: 16 }}>
-          <div style={s.panelHeader}>
-            <h3 style={{ ...s.panelTitle, color: 'var(--blue)' }}>{section}</h3>
+      <div style={{ marginBottom: 12, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
+        Questionnaire version: <strong style={{ color: 'var(--text-secondary)' }}>{payload.version_label}</strong>
+      </div>
+      {visibleSections.map((section) => {
+        const questions = [...(section.questions || [])].sort((a, b) => a.order - b.order)
+        if (questions.length === 0) return null
+        return (
+          <div key={section.id} className="card" style={{ ...s.panel, marginBottom: 16 }}>
+            <div style={s.panelHeader}>
+              <h3 style={{ ...s.panelTitle, color: 'var(--blue)' }}>
+                {section.is_ai_addendum ? `${section.title} · AI Addendum` : section.title}
+              </h3>
+            </div>
+            <div style={s.panelBody}>
+              {questions.map((q) => {
+                const r = responseMap[q.id]
+                const answer = renderAdminAnswer(q, r)
+                return (
+                  <div key={q.id} style={s.responseItem}>
+                    <div style={s.qText}><strong>Q{q.question_number}.</strong> {q.question_text}</div>
+                    <div style={s.answerText}>
+                      {answer || <em style={{ color: 'var(--text-muted)' }}>No response</em>}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
           </div>
-          <div style={s.panelBody}>
-            {sections[section].map(r => (
-              <div key={r.id} style={s.responseItem}>
-                <div style={s.qText}><strong>Q{r.question_number}.</strong> {r.question_text}</div>
-                <div style={s.answerText}>
-                  {r.response_text || (r.selected_options?.length ? r.selected_options.join(', ') : <em style={{ color: 'var(--text-muted)' }}>No response</em>)}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      ))}
+        )
+      })}
     </div>
   )
 }

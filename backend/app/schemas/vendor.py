@@ -6,29 +6,19 @@ from typing import List, Optional
 
 from pydantic import BaseModel, ConfigDict
 
+from app.schemas.questionnaire import QuestionnaireSectionSchema
+
 
 class VendorAuthRequest(BaseModel):
     email: str
     token: str  # engagement vendor_token (UUID string)
 
 
-class QuestionOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: uuid.UUID
-    question_number: int
-    section: str
-    question_text: str
-    response_type: str
-    is_ai_addendum: bool
-    is_required: bool
-    order: int
-
-
 class ResponseSave(BaseModel):
     question_id: uuid.UUID
     response_text: Optional[str] = None
     selected_options: Optional[List[str]] = None
+    other_text: Optional[str] = None
 
 
 class ResponseBatch(BaseModel):
@@ -41,6 +31,7 @@ class ResponseOut(BaseModel):
     question_id: uuid.UUID
     response_text: Optional[str] = None
     selected_options: Optional[List[str]] = None
+    other_text: Optional[str] = None
     updated_at: datetime
 
 
@@ -60,7 +51,9 @@ class EngagementFormOut(BaseModel):
     application_name: str
     status: str
     is_ai_application: bool
-    questions: List[QuestionOut]
+    questionnaire_version_id: uuid.UUID
+    version_label: str
+    sections: List[QuestionnaireSectionSchema]
     files: List[VendorFileOut]
 
 

@@ -59,22 +59,36 @@ Any engagement can be cancelled from any lifecycle stage. The "Cancel Engagement
 Admin can delete any file (IR documents or vendor attachments) from the Files tab regardless of engagement status. Clicking Delete opens a password confirmation modal — the admin must re-enter their password before the deletion proceeds. Deletions are permanent and audit-logged.
 
 **Responses view**
-Read-only view of all vendor questionnaire answers, grouped by section. File upload questions show download links. All files are served through an authenticated endpoint — never directly from disk.
+Read-only view of all vendor questionnaire answers, rendered from the engagement's pinned questionnaire version (so historical engagements show their original structure even after the questionnaire has changed). The version label is shown above the answer list. File upload questions show download links. All files are served through an authenticated endpoint — never directly from disk.
 
 **Audit log**
 Every action in the system is recorded: auth events, status transitions, file uploads/deletes, field edits, submissions. Viewable per-engagement and system-wide, with actor, action key, human-readable description, and JSONB metadata.
 
 **Word export**
 Generates a `.docx` file matching the Albatha DD template:
-- Cover page (application name, OCs, document number, export date)
-- Document Control table
+- Cover page (application name, OCs, document number including any `-R{n}` revision suffix, export date)
+- Document Control table plus an engagement-metadata table showing the document number and the **Questionnaire Version** the engagement is pinned to
 - Executive Summary (Phase 3 scaffold)
 - Risk Assessment section (overall rating, summary, colour-coded risk register table)
-- Full questionnaire by section including AI addendum; images embedded inline; PDFs noted with filename
+- Full questionnaire rendered from the engagement's pinned version's sections; AI addendum on a separate page when the engagement is AI-flagged; images embedded inline; PDFs noted with filename. Choice answers using `allows_other` render as `Other — {text}` (or just `Other` when no text was supplied)
 
 **Settings**
 - Operating Companies list — add/edit/delete; used on the New Engagement form and appears in exports.
 - Assignees list — name + type label (e.g. "Vendor", "ABH IT"); used in the risk assessment assignee selector.
+
+**Questionnaire editor**
+A versioned editor at `/due-diligence/admin/questionnaire` for configuring the security questionnaire that vendors complete.
+
+- Three-column layout: sections list (with Standard / AI Addendum tabs), questions within the selected section, and a metadata panel with publish/discard controls.
+- Edit questions inline: text, response type (Text / Single choice / Multi choice / File upload), required flag, hint text, options for choice types, and an "Allow 'Other' response" toggle that auto-renders an "Other (please specify)" option in the vendor form.
+- All edits live in client state until the admin clicks **Save draft** — the entire draft is reconciled against the database in one transaction, with a single audit-log entry summarising counts of created/edited/deleted entities.
+- "Preview as vendor" opens the draft in a read-only vendor view at `/due-diligence/admin/questionnaire/preview`.
+- **Publish** opens a diff view (added/removed/edited questions matched on stable `question_key`), requires a changelog (min 20 chars) and password re-confirmation, optionally accepts a version label override (regex `v\d+\.\d+`), and atomically: renumbers the draft, flips the previous current to archived, promotes the draft to current, and clones a fresh draft from it.
+- **Discard draft** wipes the current draft and re-clones from the published version.
+- Version history is queryable and immutable — published versions are never edited or deleted.
+
+**Engagement → questionnaire version pinning**
+Each engagement is pinned to the questionnaire version that was current at creation time. Publishing a new version does not retroactively change in-flight or closed engagements: vendors, IRs, the admin Responses tab, and Word exports all render the engagement's pinned version's structure, even if the current draft has changed wildly. This guarantees the export is a faithful snapshot of what the vendor attested to at the time.
 
 ---
 
@@ -87,7 +101,7 @@ Accessed at `/due-diligence/evaluation/:token` — the token is generated when t
 - Uploading a Functional Evaluation automatically advances the engagement from `FUNCTIONAL_EVALUATION_PENDING` to `PENDING_DISPATCH`. The admin must then explicitly click **Dispatch to Vendor** to issue the questionnaire link.
 - The Functional Evaluation cannot be deleted once the questionnaire has been dispatched (`DD_IN_PROGRESS` or later). It can be replaced before dispatch if the wrong file was uploaded.
 - Document uploads and deletes are permitted in `PENDING_CLOSURE`. Once the admin clicks **Close Engagement**, the IR portal locks — no further changes until the admin moves the engagement to `UNDER_REVIEW`.
-- Two-tab layout: **Pre-DD Documents** (upload) and **Vendor Responses** (read-only, visible from `DD_IN_PROGRESS` onwards). The Vendor Responses tab shows all vendor answers grouped by section with last-updated timestamps.
+- Two-tab layout: **Pre-DD Documents** (upload) and **Vendor Responses** (read-only, visible from `DD_IN_PROGRESS` onwards). The Vendor Responses tab renders the engagement's pinned questionnaire version's full structure (including unanswered questions), labelled with the version (e.g. `v1.0`), and shows answers — including `Other — …` for choice-with-other responses — with last-updated timestamps.
 - Dark mode toggle; status badge in header.
 
 ---
@@ -97,9 +111,10 @@ Accessed at `/due-diligence/evaluation/:token` — the token is generated when t
 Accessed at `/due-diligence/respond/:token` — the token is generated when the engagement is created and is sent to vendor email addresses.
 
 - Email verification gate: vendor enters their email, checked against `vendor_emails`. JWT is scoped to this specific engagement and validated on every request.
-- 43-question security questionnaire (Q1–30 standard; Q31–43 AI addendum, shown only for AI applications).
+- Renders the engagement's pinned questionnaire version: sections, questions, and options are loaded from that version regardless of whether a newer version has since been published. The seeded `v1.0` version has 43 questions across 12 sections (standard + AI addendum, the latter shown only when the engagement is flagged as an AI application).
+- Question response types: TEXT (textarea), SINGLE_CHOICE (radio), MULTI_CHOICE (checkbox), FILE_UPLOAD (drag-and-drop with per-file and total size limits enforced server-side). Choice questions with `allows_other=true` render an extra "Other (please specify)" option that expands a text field on selection — saved as the sentinel `__other__` in `selected_options` plus the text in `other_text`.
 - **Save draft** button in the sticky header — responses are saved manually on demand rather than automatically. Reloading the page restores the last saved state, so vendors can discard unwanted changes by refreshing.
-- FILE_UPLOAD questions (Q9, Q10 — architecture diagrams) support drag-and-drop with per-file and total size limits enforced server-side.
+- Server-side validation rejects any save whose `question_id` doesn't belong to the engagement's pinned version (400).
 - Form becomes read-only once submitted or if the engagement moves out of the active DD window.
 - Submit confirmation modal; submission advances engagement to `RISK_ASSESSMENT_PENDING`.
 
@@ -203,9 +218,8 @@ docker compose up -d --build
 
 On first start, the backend will:
 1. Wait for PostgreSQL to be healthy
-2. Run `alembic upgrade head` to create all tables
-3. Seed all 43 questionnaire questions if the table is empty
-4. Start uvicorn
+2. Run `alembic upgrade head` — migration `0004_questionnaire_versioning` creates the `questionnaire_versions` / `questionnaire_sections` / `question_options` tables, seeds the initial published `v1.0` version with all 43 questions across 12 sections, pins any pre-existing engagements to `v1.0`, and clones a starter draft so the admin questionnaire editor is usable from day one
+3. Start uvicorn
 
 ### 6. Access the application
 
@@ -270,5 +284,12 @@ If deploying without a WAF, admin and IR routes will be publicly accessible — 
 |---|---|
 | Phase 1 — Foundation, vendor portal, IR portal | Complete |
 | Phase 2 — Admin UI, risk assessment, structured fields, Word export | Complete |
+| Phase Q1 — Questionnaire versioning schema + Alembic migration & backfill | Complete |
+| Phase Q2 — Admin questionnaire editor (read-only) | Complete |
+| Phase Q3 — Admin questionnaire editor (write, batched save) | Complete |
+| Phase Q4 — Publish flow, draft diff, version history | Complete |
+| Phase Q5 — Version-aware vendor / IR / admin / export rendering | Complete |
+| Phase Q6 — Engagement refresh (R1/R2) flow | Not started |
+| Phase Q7 — Dashboard revision grouping + Responses tab revision selector | Not started |
 | Phase 3 — Claude AI integration, email notifications, database backup | Not started |
 | Phase 4 — JSON/Word import | Not started |

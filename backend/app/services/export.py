@@ -15,6 +15,7 @@ from sqlalchemy.orm import selectinload
 
 from app.models.engagement import Engagement
 from app.models.question import Question, ResponseType
+from app.models.questionnaire_section import QuestionnaireSection
 from app.models.response import Response
 from app.models.risk_assessment import RiskAssessment, RiskRating
 
@@ -128,7 +129,7 @@ def _cover(doc: Document, eng: Engagement) -> None:
     _run(fp, "Albatha IT — Information Security Team", size_pt=10, color=_MUTED)
 
 
-def _doc_control(doc: Document) -> None:
+def _doc_control(doc: Document, eng: Engagement) -> None:
     _h1(doc, "Document Control")
     date_str = datetime.now(timezone.utc).strftime("%d %B %Y")
     tbl = doc.add_table(rows=2, cols=4)
@@ -138,6 +139,27 @@ def _doc_control(doc: Document) -> None:
     for i, d in enumerate(data):
         tbl.rows[1].cells[i].paragraphs[0].clear()
         _run(tbl.rows[1].cells[i].paragraphs[0], d, size_pt=10)
+
+    # Metadata table — Questionnaire Version (and other engagement metadata)
+    version_label = eng.questionnaire_version.version_label if eng.questionnaire_version else "—"
+    meta_rows = [
+        ("Document Number", eng.doc_number),
+        ("Questionnaire Version", version_label),
+    ]
+
+    meta = doc.add_paragraph()
+    meta.paragraph_format.space_before = Pt(10)
+
+    mtbl = doc.add_table(rows=len(meta_rows), cols=2)
+    mtbl.style = "Table Grid"
+    for i, (label, value) in enumerate(meta_rows):
+        lcell = mtbl.rows[i].cells[0]
+        vcell = mtbl.rows[i].cells[1]
+        lcell.paragraphs[0].clear()
+        _run(lcell.paragraphs[0], label, bold=True, size_pt=10)
+        _cell_bg(lcell, "F2F2F2")
+        vcell.paragraphs[0].clear()
+        _run(vcell.paragraphs[0], value, size_pt=10)
 
 
 def _exec_summary(doc: Document) -> None:
@@ -239,11 +261,16 @@ def _q_block(doc: Document, question, response, files: list) -> None:
 
     elif question.response_type in (ResponseType.SINGLE_CHOICE, ResponseType.MULTI_CHOICE):
         opts = response.selected_options or []
+        other_text = (response.other_text or "").strip()
         if opts:
             for opt in opts:
                 pp = doc.add_paragraph()
                 pp.paragraph_format.left_indent = Cm(0.5)
-                _run(pp, f"•  {opt}", size_pt=10)
+                if opt == "__other__":
+                    label = f"Other — {other_text}" if other_text else "Other"
+                else:
+                    label = opt
+                _run(pp, f"•  {label}", size_pt=10)
         else:
             pp = doc.add_paragraph()
             pp.paragraph_format.left_indent = Cm(0.5)
@@ -280,35 +307,27 @@ def _q_block(doc: Document, question, response, files: list) -> None:
 def _questionnaire(
     doc: Document,
     eng: Engagement,
-    questions: list,
+    sections: list,
     responses: dict,
     files_by_q: dict,
 ) -> None:
     _h1(doc, "3.  Due Diligence Questionnaire")
 
-    standard = [q for q in questions if not q.section.is_ai_addendum]
-    addendum = [q for q in questions if q.section.is_ai_addendum]
+    standard_sections = [s for s in sections if not s.is_ai_addendum]
+    addendum_sections = [s for s in sections if s.is_ai_addendum]
 
-    # Group standard questions by section title (preserve order)
-    seen: list[str] = []
-    by_section: dict[str, list] = {}
-    for q in standard:
-        title = q.section.title
-        if title not in by_section:
-            seen.append(title)
-            by_section[title] = []
-        by_section[title].append(q)
-
-    for section in seen:
-        _h2(doc, section)
-        for q in by_section[section]:
+    for section in standard_sections:
+        _h2(doc, section.title)
+        for q in sorted(section.questions, key=lambda q: q.order):
             _q_block(doc, q, responses.get(q.id), files_by_q.get(q.id, []))
 
-    if addendum and eng.is_ai_application:
+    if addendum_sections and eng.is_ai_application:
         doc.add_page_break()
         _h1(doc, "4.  AI Application Addendum")
-        for q in addendum:
-            _q_block(doc, q, responses.get(q.id), files_by_q.get(q.id, []))
+        for section in addendum_sections:
+            _h2(doc, section.title)
+            for q in sorted(section.questions, key=lambda q: q.order):
+                _q_block(doc, q, responses.get(q.id), files_by_q.get(q.id, []))
 
 
 # ── Public API ─────────────────────────────────────────────────────────────────
@@ -324,19 +343,20 @@ async def generate_export(engagement_id: uuid.UUID, db: AsyncSession) -> bytes:
             selectinload(Engagement.files),
             selectinload(Engagement.risk_assessment).selectinload(RiskAssessment.risk_items),
             selectinload(Engagement.structured_fields),
+            selectinload(Engagement.questionnaire_version),
         )
     )
     eng = result.scalar_one_or_none()
     if eng is None:
         raise ValueError(f"Engagement {engagement_id} not found")
 
-    q_result = await db.execute(
-        select(Question)
-        .where(Question.version_id == eng.questionnaire_version_id)
-        .options(selectinload(Question.section))
-        .order_by(Question.question_number)
+    sec_result = await db.execute(
+        select(QuestionnaireSection)
+        .where(QuestionnaireSection.version_id == eng.questionnaire_version_id)
+        .options(selectinload(QuestionnaireSection.questions).selectinload(Question.options))
+        .order_by(QuestionnaireSection.order)
     )
-    questions = list(q_result.scalars().all())
+    sections = list(sec_result.scalars().all())
 
     r_result = await db.execute(
         select(Response).where(Response.engagement_id == engagement_id)
@@ -360,13 +380,13 @@ async def generate_export(engagement_id: uuid.UUID, db: AsyncSession) -> bytes:
 
     _cover(doc, eng)
     doc.add_page_break()
-    _doc_control(doc)
+    _doc_control(doc, eng)
     doc.add_page_break()
     _exec_summary(doc)
     doc.add_page_break()
     _risk_section(doc, eng.risk_assessment)
     doc.add_page_break()
-    _questionnaire(doc, eng, questions, responses, files_by_q)
+    _questionnaire(doc, eng, sections, responses, files_by_q)
 
     buf = io.BytesIO()
     doc.save(buf)

@@ -15,6 +15,7 @@ from app.models.audit_log import ActorType, AuditLog
 from app.models.engagement import Engagement, EngagementStatus
 from app.models.file_upload import FileType, FileUpload
 from app.models.question import Question
+from app.models.questionnaire_section import QuestionnaireSection
 from app.models.questionnaire_version import QuestionnaireVersion
 from app.models.response import Response
 from app.models.risk_assessment import RiskAssessment, RiskAssessmentStatus
@@ -24,11 +25,13 @@ from app.schemas.engagement import (
     EngagementCreate,
     EngagementListResponse,
     EngagementResponse,
+    EngagementResponsesPayload,
     EngagementUpdate,
     IRDocumentOut,
-    ResponseDetail,
+    ResponseEntry,
     SetStatusRequest,
 )
+from app.schemas.questionnaire import QuestionnaireSectionSchema
 from app.services.audit import log_action
 from app.services.auth import get_admin_user, verify_password
 from app.services.export import generate_export
@@ -611,35 +614,43 @@ async def close_from_pending(
 # Responses (read-only for admin)
 # ---------------------------------------------------------------------------
 
-@router.get("/engagements/{engagement_id}/responses", response_model=list[ResponseDetail])
+@router.get("/engagements/{engagement_id}/responses", response_model=EngagementResponsesPayload)
 async def get_responses(
     engagement_id: uuid.UUID,
     admin: str = Depends(get_admin_user),
     db: AsyncSession = Depends(get_db),
-) -> list[ResponseDetail]:
-    await _get_engagement_or_404(db, engagement_id)
+) -> EngagementResponsesPayload:
+    engagement = await _get_engagement_or_404(db, engagement_id)
 
-    result = await db.execute(
-        select(Response)
-        .where(Response.engagement_id == engagement_id)
-        .options(selectinload(Response.question).selectinload(Question.section))
-    )
-    responses = result.scalars().all()
-
-    return [
-        ResponseDetail(
-            id=r.id,
-            question_id=r.question_id,
-            question_number=r.question.question_number,
-            section=r.question.section.title,
-            question_text=r.question.question_text,
-            response_text=r.response_text,
-            selected_options=r.selected_options,
-            updated_at=r.updated_at,
+    version = (
+        await db.execute(
+            select(QuestionnaireVersion).where(
+                QuestionnaireVersion.id == engagement.questionnaire_version_id
+            )
         )
-        for r in responses
-        if r.question
-    ]
+    ).scalar_one()
+
+    sec_result = await db.execute(
+        select(QuestionnaireSection)
+        .where(QuestionnaireSection.version_id == engagement.questionnaire_version_id)
+        .options(selectinload(QuestionnaireSection.questions).selectinload(Question.options))
+        .order_by(QuestionnaireSection.order)
+    )
+    sections = sec_result.scalars().all()
+
+    r_result = await db.execute(
+        select(Response).where(Response.engagement_id == engagement_id)
+    )
+    responses = r_result.scalars().all()
+
+    return EngagementResponsesPayload(
+        engagement_id=engagement.id,
+        questionnaire_version_id=version.id,
+        version_label=version.version_label,
+        is_ai_application=engagement.is_ai_application,
+        sections=[QuestionnaireSectionSchema.model_validate(s) for s in sections],
+        responses=[ResponseEntry.model_validate(r) for r in responses],
+    )
 
 
 # ---------------------------------------------------------------------------

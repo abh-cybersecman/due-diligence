@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict
 
 from app.models.engagement import EngagementStatus
 from app.models.file_upload import FileType
+from app.schemas.questionnaire import QuestionnaireSectionSchema
 from app.schemas.settings import OCResponse
 
 
@@ -77,7 +78,36 @@ class ResponseDetail(BaseModel):
     question_text: str
     response_text: str | None
     selected_options: list[str] | None
+    other_text: str | None = None
     updated_at: datetime
+
+
+class ResponseEntry(BaseModel):
+    """Stored response for a question, in the version-aware payload."""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    question_id: uuid.UUID
+    response_text: Optional[str] = None
+    selected_options: Optional[list[str]] = None
+    other_text: Optional[str] = None
+    updated_at: datetime
+
+
+class EngagementResponsesPayload(BaseModel):
+    """Version-aware responses payload returned by IR and admin response endpoints.
+
+    Includes the engagement's pinned questionnaire version (sections + questions
+    + options) plus the saved response rows. Frontends render the structure from
+    `sections` and look up answers in `responses` by question_id.
+    """
+
+    engagement_id: uuid.UUID
+    questionnaire_version_id: uuid.UUID
+    version_label: str
+    is_ai_application: bool
+    sections: list[QuestionnaireSectionSchema]
+    responses: list[ResponseEntry]
 
 
 # ---------------------------------------------------------------------------

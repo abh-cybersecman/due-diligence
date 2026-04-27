@@ -281,6 +281,98 @@ const fzStyles = {
   totals: { fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginTop: 2 },
 }
 
+// ─── ChoiceField (SINGLE_CHOICE / MULTI_CHOICE) ──────────────────────────────
+
+function ChoiceField({ question, value, isReadOnly, multi, onSingle, onMulti, onOtherText }) {
+  const selected = value?.selected_options ?? []
+  const otherText = value?.other_text ?? ''
+  const options = [...(question.options || [])].sort((a, b) => a.order - b.order)
+  const otherSelected = selected.includes('__other__')
+
+  function isChecked(label) {
+    return selected.includes(label)
+  }
+
+  function onChange(label, checked) {
+    if (multi) onMulti(question.id, label, checked)
+    else onSingle(question.id, label)
+  }
+
+  return (
+    <div style={choiceStyles.list}>
+      {options.map((opt) => (
+        <label key={opt.id} style={choiceStyles.row}>
+          <input
+            type={multi ? 'checkbox' : 'radio'}
+            name={`q_${question.id}`}
+            checked={isChecked(opt.label)}
+            disabled={isReadOnly}
+            onChange={(e) => onChange(opt.label, e.target.checked)}
+            style={{ marginTop: 2 }}
+          />
+          <span style={choiceStyles.label}>{opt.label}</span>
+        </label>
+      ))}
+      {question.allows_other && (
+        <>
+          <label style={choiceStyles.row}>
+            <input
+              type={multi ? 'checkbox' : 'radio'}
+              name={`q_${question.id}`}
+              checked={otherSelected}
+              disabled={isReadOnly}
+              onChange={(e) => onChange('__other__', e.target.checked)}
+              style={{ marginTop: 2 }}
+            />
+            <span style={choiceStyles.label}>Other (please specify)</span>
+          </label>
+          {otherSelected && (
+            <input
+              type="text"
+              value={otherText}
+              readOnly={isReadOnly}
+              onChange={(e) => onOtherText(question.id, e.target.value)}
+              placeholder={isReadOnly ? '' : 'Please specify…'}
+              style={{
+                ...choiceStyles.otherInput,
+                ...(isReadOnly ? choiceStyles.otherInputReadOnly : {}),
+              }}
+            />
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
+const choiceStyles = {
+  list: { display: 'flex', flexDirection: 'column', gap: 6 },
+  row: {
+    display: 'flex', alignItems: 'flex-start', gap: 8,
+    fontSize: 'var(--text-sm)', color: 'var(--text-primary)',
+    cursor: 'pointer', lineHeight: 1.5,
+  },
+  label: { flex: 1 },
+  otherInput: {
+    marginTop: 4,
+    marginLeft: 24,
+    width: 'calc(100% - 24px)',
+    padding: '6px 10px',
+    background: 'var(--bg-surface)',
+    border: '1px solid var(--border)',
+    borderRadius: 'var(--radius-sm)',
+    color: 'var(--text-primary)',
+    fontSize: 'var(--text-sm)',
+    fontFamily: 'inherit',
+    outline: 'none',
+  },
+  otherInputReadOnly: {
+    background: 'var(--bg-subtle)',
+    color: 'var(--text-secondary)',
+    cursor: 'default',
+  },
+}
+
 // ─── Main questionnaire ───────────────────────────────────────────────────────
 
 export default function VendorQuestionnaire({
@@ -345,6 +437,7 @@ export default function VendorQuestionnaire({
             responseMap[r.question_id] = {
               response_text: r.response_text ?? '',
               selected_options: r.selected_options ?? [],
+              other_text: r.other_text ?? '',
             }
           }
           setResponses(responseMap)
@@ -389,18 +482,63 @@ export default function VendorQuestionnaire({
     }
   }, [token, accessToken, onLogout])
 
-  function handleTextChange(questionId, value) {
-    setResponses((prev) => ({
-      ...prev,
-      [questionId]: { ...prev[questionId], response_text: value },
-    }))
+  function markPending(questionId, next) {
     pendingRef.current[questionId] = {
       question_id: questionId,
-      response_text: value,
-      selected_options: responses[questionId]?.selected_options ?? [],
+      response_text: next.response_text ?? '',
+      selected_options: next.selected_options ?? [],
+      other_text: next.other_text ?? '',
     }
     setHasPendingChanges(true)
     if (saveStatus !== 'error') setSaveStatus('idle')
+  }
+
+  function handleTextChange(questionId, value) {
+    setResponses((prev) => {
+      const cur = prev[questionId] ?? {}
+      const next = { ...cur, response_text: value }
+      markPending(questionId, next)
+      return { ...prev, [questionId]: next }
+    })
+  }
+
+  function handleSingleChoice(questionId, optionLabel) {
+    setResponses((prev) => {
+      const cur = prev[questionId] ?? {}
+      const next = {
+        ...cur,
+        selected_options: [optionLabel],
+        // Clear other_text unless the new selection is __other__
+        other_text: optionLabel === '__other__' ? (cur.other_text ?? '') : '',
+      }
+      markPending(questionId, next)
+      return { ...prev, [questionId]: next }
+    })
+  }
+
+  function handleMultiChoice(questionId, optionLabel, checked) {
+    setResponses((prev) => {
+      const cur = prev[questionId] ?? {}
+      const set = new Set(cur.selected_options ?? [])
+      if (checked) set.add(optionLabel); else set.delete(optionLabel)
+      const selected = Array.from(set)
+      const next = {
+        ...cur,
+        selected_options: selected,
+        other_text: selected.includes('__other__') ? (cur.other_text ?? '') : '',
+      }
+      markPending(questionId, next)
+      return { ...prev, [questionId]: next }
+    })
+  }
+
+  function handleOtherTextChange(questionId, value) {
+    setResponses((prev) => {
+      const cur = prev[questionId] ?? {}
+      const next = { ...cur, other_text: value }
+      markPending(questionId, next)
+      return { ...prev, [questionId]: next }
+    })
   }
 
   // ── File upload ────────────────────────────────────────────────────────────
@@ -485,29 +623,30 @@ export default function VendorQuestionnaire({
   const canSubmit = previewMode ? false : (meta ? SUBMIT_STATUSES.has(meta.status) : false)
 
   const sections = useMemo(() => {
-    if (!meta?.questions) return []
+    if (!meta?.sections) return []
 
-    const regular = meta.questions.filter((q) => !q.is_ai_addendum)
-    const ai = meta.questions.filter((q) => q.is_ai_addendum)
+    const sortedSections = [...meta.sections].sort((a, b) => a.order - b.order)
+    const standard = sortedSections.filter((s) => !s.is_ai_addendum)
+    const ai = sortedSections.filter((s) => s.is_ai_addendum)
 
-    function groupBySection(qs) {
-      const map = {}
-      for (const q of qs) {
-        if (!map[q.section]) map[q.section] = []
-        map[q.section].push(q)
-      }
-      return Object.entries(map).map(([name, questions]) => ({ name, questions }))
-    }
-
-    const result = groupBySection(regular).map((s) => ({ ...s, isAI: false }))
+    const out = standard.map((s) => ({
+      id: s.id,
+      name: s.title,
+      isAI: false,
+      questions: [...(s.questions || [])].sort((a, b) => a.order - b.order),
+    }))
 
     if (meta.is_ai_application && ai.length > 0) {
-      for (const s of groupBySection(ai)) {
-        result.push({ ...s, isAI: true })
+      for (const s of ai) {
+        out.push({
+          id: s.id,
+          name: s.title,
+          isAI: true,
+          questions: [...(s.questions || [])].sort((a, b) => a.order - b.order),
+        })
       }
     }
-
-    return result
+    return out
   }, [meta])
 
   const totalFiles = files.length
@@ -675,6 +814,9 @@ export default function VendorQuestionnaire({
                       </div>
                       <div style={s.questionBody}>
                         <p style={s.questionText}>{question.question_text}</p>
+                        {question.hint_text && (
+                          <p style={s.questionHint}>{question.hint_text}</p>
+                        )}
 
                         {question.response_type === 'FILE_UPLOAD' ? (
                           <QuestionFileZone
@@ -684,6 +826,26 @@ export default function VendorQuestionnaire({
                             onDelete={handleFileDelete}
                             isReadOnly={!isEditable}
                             uploading={uploadingQuestion}
+                          />
+                        ) : question.response_type === 'SINGLE_CHOICE' ? (
+                          <ChoiceField
+                            question={question}
+                            value={responses[question.id]}
+                            isReadOnly={!isEditable}
+                            multi={false}
+                            onSingle={handleSingleChoice}
+                            onMulti={handleMultiChoice}
+                            onOtherText={handleOtherTextChange}
+                          />
+                        ) : question.response_type === 'MULTI_CHOICE' ? (
+                          <ChoiceField
+                            question={question}
+                            value={responses[question.id]}
+                            isReadOnly={!isEditable}
+                            multi={true}
+                            onSingle={handleSingleChoice}
+                            onMulti={handleMultiChoice}
+                            onOtherText={handleOtherTextChange}
                           />
                         ) : (
                           <textarea
@@ -890,6 +1052,10 @@ const s = {
   questionBody: { flex: 1, display: 'flex', flexDirection: 'column', gap: 10 },
   questionText: {
     fontSize: 'var(--text-sm)', color: 'var(--text-primary)', lineHeight: 1.6,
+  },
+  questionHint: {
+    fontSize: 'var(--text-xs)', color: 'var(--text-muted)', lineHeight: 1.5,
+    marginTop: -6,
   },
   textarea: {
     width: '100%', minHeight: 100,
