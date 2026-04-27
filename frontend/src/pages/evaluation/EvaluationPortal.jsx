@@ -269,7 +269,34 @@ function renderChoiceAnswer(question, response) {
   }).join(', ')
 }
 
-function ResponseAnswer({ question, response }) {
+function formatFileSize(bytes) {
+  if (typeof bytes !== 'number' || bytes < 0) return ''
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function ResponseAnswer({ question, response, attachments }) {
+  if (question.response_type === 'FILE_UPLOAD') {
+    const files = attachments || []
+    if (files.length === 0) {
+      return <div style={rvStyles.noAnswer}>No file uploaded</div>
+    }
+    return (
+      <div style={{ ...rvStyles.answer, display: 'flex', flexDirection: 'column', gap: 4 }}>
+        {files.map((f) => (
+          <div key={f.id}>
+            📎 {f.original_filename}
+            {f.file_size_bytes != null && (
+              <span style={{ color: 'var(--text-muted)' }}>
+                {' '}({formatFileSize(f.file_size_bytes)})
+              </span>
+            )}
+          </div>
+        ))}
+      </div>
+    )
+  }
   if (!response) {
     return <div style={rvStyles.noAnswer}>No answer entered</div>
   }
@@ -283,9 +310,6 @@ function ResponseAnswer({ question, response }) {
     return text
       ? <div style={rvStyles.answer}>{text}</div>
       : <div style={rvStyles.noAnswer}>No answer entered</div>
-  }
-  if (question.response_type === 'FILE_UPLOAD') {
-    return <div style={rvStyles.noAnswer}>See attached files</div>
   }
   return <div style={rvStyles.noAnswer}>No answer entered</div>
 }
@@ -322,12 +346,21 @@ function VendorResponsesTab({ token, accessToken, onLogout }) {
   const responseMap = {}
   for (const r of payload.responses) responseMap[r.question_id] = r
 
+  const attachmentsMap = {}
+  for (const f of payload.vendor_attachments || []) {
+    if (!attachmentsMap[f.question_id]) attachmentsMap[f.question_id] = []
+    attachmentsMap[f.question_id].push(f)
+  }
+
   const sortedSections = [...(payload.sections || [])].sort((a, b) => a.order - b.order)
   const visibleSections = sortedSections.filter((s) => !s.is_ai_addendum || payload.is_ai_application)
 
   const allQuestions = visibleSections.flatMap((s) => s.questions || [])
   const totalQuestions = allQuestions.length
   const answeredCount = allQuestions.filter((q) => {
+    if (q.response_type === 'FILE_UPLOAD') {
+      return (attachmentsMap[q.id] || []).length > 0
+    }
     const r = responseMap[q.id]
     if (!r) return false
     if (r.response_text && r.response_text.trim()) return true
@@ -366,6 +399,7 @@ function VendorResponsesTab({ token, accessToken, onLogout }) {
             <div style={{ display: 'flex', flexDirection: 'column' }}>
               {qs.map((q, idx) => {
                 const r = responseMap[q.id]
+                const files = attachmentsMap[q.id]
                 return (
                   <div
                     key={q.id}
@@ -377,7 +411,7 @@ function VendorResponsesTab({ token, accessToken, onLogout }) {
                     <div style={rvStyles.qNum}>Q{q.question_number}</div>
                     <div style={rvStyles.qBody}>
                       <div style={rvStyles.qText}>{q.question_text}</div>
-                      <ResponseAnswer question={q} response={r} />
+                      <ResponseAnswer question={q} response={r} attachments={files} />
                       {r && (
                         <div style={rvStyles.meta}>Last updated {formatDate(r.updated_at)}</div>
                       )}

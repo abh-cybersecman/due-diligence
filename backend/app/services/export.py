@@ -243,6 +243,12 @@ def _q_block(doc: Document, question, response, files: list) -> None:
     qp.paragraph_format.space_after = Pt(2)
     _run(qp, f"Q{question.question_number}.  {question.question_text}", bold=True, size_pt=11)
 
+    # FILE_UPLOAD has no Response row — only FileUpload rows. Render those
+    # directly rather than treating absence-of-text as "no response".
+    if question.response_type == ResponseType.FILE_UPLOAD:
+        _render_file_upload(doc, files)
+        return
+
     if response is None:
         rp = doc.add_paragraph()
         rp.paragraph_format.left_indent = Cm(0.5)
@@ -276,32 +282,33 @@ def _q_block(doc: Document, question, response, files: list) -> None:
             pp.paragraph_format.left_indent = Cm(0.5)
             _run(pp, "[No option selected]", italic=True, size_pt=10, color=_MUTED)
 
-    elif question.response_type == ResponseType.FILE_UPLOAD:
-        if not files:
-            pp = doc.add_paragraph()
-            pp.paragraph_format.left_indent = Cm(0.5)
-            _run(pp, "[No files uploaded]", italic=True, size_pt=10, color=_MUTED)
-        else:
-            for f in files:
-                if f.mime_type and f.mime_type.startswith("image/"):
-                    try:
-                        if Path(f.stored_path).exists():
-                            doc.add_picture(f.stored_path, width=Cm(12))
-                            cap = doc.add_paragraph()
-                            cap.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                            _run(cap, f.original_filename, italic=True, size_pt=9, color=_MUTED)
-                        else:
-                            pp = doc.add_paragraph()
-                            pp.paragraph_format.left_indent = Cm(0.5)
-                            _run(pp, f"[Image not found: {f.original_filename}]", italic=True, size_pt=10, color=_MUTED)
-                    except Exception:
-                        pp = doc.add_paragraph()
-                        pp.paragraph_format.left_indent = Cm(0.5)
-                        _run(pp, f"[Image: {f.original_filename}]", italic=True, size_pt=10, color=_MUTED)
+
+def _render_file_upload(doc: Document, files: list) -> None:
+    if not files:
+        pp = doc.add_paragraph()
+        pp.paragraph_format.left_indent = Cm(0.5)
+        _run(pp, "[No file uploaded]", italic=True, size_pt=10, color=_MUTED)
+        return
+    for f in files:
+        if f.mime_type and f.mime_type.startswith("image/"):
+            try:
+                if Path(f.stored_path).exists():
+                    doc.add_picture(f.stored_path, width=Cm(12))
+                    cap = doc.add_paragraph()
+                    cap.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    _run(cap, f.original_filename, italic=True, size_pt=9, color=_MUTED)
                 else:
                     pp = doc.add_paragraph()
                     pp.paragraph_format.left_indent = Cm(0.5)
-                    _run(pp, f"[Attachment: {f.original_filename} — see uploaded files]", size_pt=10)
+                    _run(pp, f"[Image not found: {f.original_filename}]", italic=True, size_pt=10, color=_MUTED)
+            except Exception:
+                pp = doc.add_paragraph()
+                pp.paragraph_format.left_indent = Cm(0.5)
+                _run(pp, f"[Image: {f.original_filename}]", italic=True, size_pt=10, color=_MUTED)
+        else:
+            pp = doc.add_paragraph()
+            pp.paragraph_format.left_indent = Cm(0.5)
+            _run(pp, f"📎 {f.original_filename}", size_pt=10)
 
 
 def _questionnaire(

@@ -94,12 +94,25 @@ class ResponseEntry(BaseModel):
     updated_at: datetime
 
 
+class VendorAttachmentEntry(BaseModel):
+    """Vendor-uploaded file attached to a FILE_UPLOAD-type question."""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    question_id: uuid.UUID
+    original_filename: str
+    file_size_bytes: int
+    uploaded_at: datetime
+
+
 class EngagementResponsesPayload(BaseModel):
     """Version-aware responses payload returned by IR and admin response endpoints.
 
     Includes the engagement's pinned questionnaire version (sections + questions
     + options) plus the saved response rows. Frontends render the structure from
-    `sections` and look up answers in `responses` by question_id.
+    `sections` and look up answers in `responses` by question_id. For
+    FILE_UPLOAD questions, vendor uploads are exposed via `vendor_attachments`
+    keyed by `question_id`.
     """
 
     engagement_id: uuid.UUID
@@ -108,6 +121,7 @@ class EngagementResponsesPayload(BaseModel):
     is_ai_application: bool
     sections: list[QuestionnaireSectionSchema]
     responses: list[ResponseEntry]
+    vendor_attachments: list[VendorAttachmentEntry] = []
 
 
 # ---------------------------------------------------------------------------

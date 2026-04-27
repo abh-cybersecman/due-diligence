@@ -901,7 +901,34 @@ function RiskItemRow({ item, idx, disabled, assignees, onChange, onRemove }) {
 
 // ── Responses tab ─────────────────────────────────────────────────────────────
 
-function renderAdminAnswer(question, response) {
+function formatFileSize(bytes) {
+  if (typeof bytes !== 'number' || bytes < 0) return ''
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function renderAdminAnswer(question, response, attachments) {
+  if (question.response_type === 'FILE_UPLOAD') {
+    const files = attachments || []
+    if (files.length === 0) {
+      return <em style={{ color: 'var(--text-muted)' }}>No file uploaded</em>
+    }
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        {files.map((f) => (
+          <div key={f.id}>
+            📎 {f.original_filename}
+            {f.file_size_bytes != null && (
+              <span style={{ color: 'var(--text-muted)' }}>
+                {' '}({formatFileSize(f.file_size_bytes)})
+              </span>
+            )}
+          </div>
+        ))}
+      </div>
+    )
+  }
   if (!response) return null
   if (question.response_type === 'TEXT') {
     return response.response_text || null
@@ -914,9 +941,6 @@ function renderAdminAnswer(question, response) {
       if (opt === '__other__') return otherText ? `Other — ${otherText}` : 'Other'
       return opt
     }).join(', ')
-  }
-  if (question.response_type === 'FILE_UPLOAD') {
-    return null
   }
   return null
 }
@@ -945,6 +969,12 @@ function ResponsesTab({ engagementId, apiFetch }) {
 
   const responseMap = {}
   for (const r of payload.responses || []) responseMap[r.question_id] = r
+
+  const attachmentsMap = {}
+  for (const f of payload.vendor_attachments || []) {
+    if (!attachmentsMap[f.question_id]) attachmentsMap[f.question_id] = []
+    attachmentsMap[f.question_id].push(f)
+  }
 
   const sortedSections = [...(payload.sections || [])].sort((a, b) => a.order - b.order)
   const visibleSections = sortedSections.filter((s) => !s.is_ai_addendum || payload.is_ai_application)
@@ -977,7 +1007,8 @@ function ResponsesTab({ engagementId, apiFetch }) {
             <div style={s.panelBody}>
               {questions.map((q) => {
                 const r = responseMap[q.id]
-                const answer = renderAdminAnswer(q, r)
+                const files = attachmentsMap[q.id]
+                const answer = renderAdminAnswer(q, r, files)
                 return (
                   <div key={q.id} style={s.responseItem}>
                     <div style={s.qText}><strong>Q{q.question_number}.</strong> {q.question_text}</div>

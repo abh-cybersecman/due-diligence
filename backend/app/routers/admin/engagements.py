@@ -30,6 +30,7 @@ from app.schemas.engagement import (
     IRDocumentOut,
     ResponseEntry,
     SetStatusRequest,
+    VendorAttachmentEntry,
 )
 from app.schemas.questionnaire import QuestionnaireSectionSchema
 from app.services.audit import log_action
@@ -643,6 +644,15 @@ async def get_responses(
     )
     responses = r_result.scalars().all()
 
+    att_result = await db.execute(
+        select(FileUpload).where(
+            FileUpload.engagement_id == engagement_id,
+            FileUpload.file_type == FileType.VENDOR_ATTACHMENT,
+            FileUpload.question_id.is_not(None),
+        )
+    )
+    attachments = att_result.scalars().all()
+
     return EngagementResponsesPayload(
         engagement_id=engagement.id,
         questionnaire_version_id=version.id,
@@ -650,6 +660,7 @@ async def get_responses(
         is_ai_application=engagement.is_ai_application,
         sections=[QuestionnaireSectionSchema.model_validate(s) for s in sections],
         responses=[ResponseEntry.model_validate(r) for r in responses],
+        vendor_attachments=[VendorAttachmentEntry.model_validate(f) for f in attachments],
     )
 
 
