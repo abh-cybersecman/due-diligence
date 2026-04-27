@@ -56,9 +56,9 @@ router = APIRouter(prefix="/questionnaire", tags=["admin-questionnaire"])
 
 
 async def _load_version_detail(
-    db: AsyncSession, version_id: uuid.UUID
+    db: AsyncSession, version_id: uuid.UUID, *, fresh: bool = False
 ) -> QuestionnaireVersion | None:
-    return await load_version_with_contents(db, version_id)
+    return await load_version_with_contents(db, version_id, fresh=fresh)
 
 
 async def _get_draft_id(db: AsyncSession) -> uuid.UUID:
@@ -504,7 +504,7 @@ async def save_draft(
             metadata=metadata,
         )
 
-    refreshed = await _load_version_detail(db, draft_id)
+    refreshed = await _load_version_detail(db, draft_id, fresh=True)
     assert refreshed is not None  # we just held a reference
 
     return SaveDraftResponse(
@@ -904,8 +904,8 @@ async def publish_draft(
     )
 
     # 6. Load canonical state for response.
-    published_reloaded = await _load_version_detail(db, draft_id)
-    new_draft_reloaded = await _load_version_detail(db, new_draft.id)
+    published_reloaded = await _load_version_detail(db, draft_id, fresh=True)
+    new_draft_reloaded = await _load_version_detail(db, new_draft.id, fresh=True)
     assert published_reloaded is not None and new_draft_reloaded is not None
 
     return PublishDraftResponse(
@@ -963,7 +963,7 @@ async def discard_draft(
         },
     )
 
-    refreshed = await _load_version_detail(db, draft_id)
+    refreshed = await _load_version_detail(db, draft_id, fresh=True)
     assert refreshed is not None
     return DiscardDraftResponse(
         draft=QuestionnaireVersionDetail.model_validate(

@@ -67,10 +67,19 @@ async def renumber_version(db: AsyncSession, version_id: uuid.UUID) -> int:
 
 
 async def load_version_with_contents(
-    db: AsyncSession, version_id: uuid.UUID
+    db: AsyncSession,
+    version_id: uuid.UUID,
+    *,
+    fresh: bool = False,
 ) -> QuestionnaireVersion | None:
-    """Load a version with its sections, questions, and options eagerly loaded."""
-    result = await db.execute(
+    """Load a version with its sections, questions, and options eagerly loaded.
+
+    When ``fresh=True``, forces re-population of any already-loaded instances
+    in the session so callers that mutate the draft within a request can read
+    back the canonical state. Without this, SQLAlchemy's identity map serves
+    the stale collections that don't reflect newly-added or deleted children.
+    """
+    stmt = (
         select(QuestionnaireVersion)
         .where(QuestionnaireVersion.id == version_id)
         .options(
@@ -79,6 +88,9 @@ async def load_version_with_contents(
             .selectinload(Question.options)
         )
     )
+    if fresh:
+        stmt = stmt.execution_options(populate_existing=True)
+    result = await db.execute(stmt)
     return result.scalar_one_or_none()
 
 
