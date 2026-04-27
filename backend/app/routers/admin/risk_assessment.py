@@ -9,7 +9,6 @@ from sqlalchemy.orm import selectinload
 from app.database import get_db
 from app.models.audit_log import ActorType
 from app.models.engagement import Engagement, EngagementStatus
-from app.models.file_upload import FileType
 from app.models.risk_assessment import RiskAssessment, RiskAssessmentStatus, RiskItem
 from app.schemas.risk_assessment import (
     RiskAssessmentCreate,
@@ -23,11 +22,7 @@ router = APIRouter(tags=["admin-risk-assessment"])
 
 
 async def _get_engagement(db: AsyncSession, engagement_id: uuid.UUID) -> Engagement:
-    result = await db.execute(
-        select(Engagement)
-        .where(Engagement.id == engagement_id)
-        .options(selectinload(Engagement.files))
-    )
+    result = await db.execute(select(Engagement).where(Engagement.id == engagement_id))
     eng = result.scalar_one_or_none()
     if eng is None:
         raise HTTPException(404, "Engagement not found")
@@ -172,16 +167,12 @@ async def finalise_risk_assessment(
         engagement_id=engagement_id,
     )
 
-    # Auto-advance engagement when in RISK_ASSESSMENT_PENDING
+    # On finalise, always advance to PENDING_CLOSURE. Admin must click
+    # "Close Engagement" explicitly to transition to CLOSED (which gates on
+    # NDA + SOW being present).
     if engagement.status == EngagementStatus.RISK_ASSESSMENT_PENDING:
-        has_nda = any(f.file_type == FileType.IR_NDA for f in engagement.files)
-        has_sow = any(f.file_type == FileType.IR_SOW for f in engagement.files)
-        new_status = (
-            EngagementStatus.CLOSED if (has_nda and has_sow)
-            else EngagementStatus.PENDING_CLOSURE
-        )
         old_status = engagement.status
-        engagement.status = new_status
+        engagement.status = EngagementStatus.PENDING_CLOSURE
         engagement.updated_at = datetime.now(timezone.utc)
 
         await log_action(
@@ -189,9 +180,9 @@ async def finalise_risk_assessment(
             actor="system",
             actor_type=ActorType.ADMIN,
             action="engagement.status.advanced",
-            description=f"Engagement advanced to {new_status.value} after risk assessment finalised",
+            description=f"Engagement advanced to {EngagementStatus.PENDING_CLOSURE.value} after risk assessment finalised",
             engagement_id=engagement_id,
-            metadata={"from": old_status.value, "to": new_status.value},
+            metadata={"from": old_status.value, "to": EngagementStatus.PENDING_CLOSURE.value},
         )
 
     await db.flush()
