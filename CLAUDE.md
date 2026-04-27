@@ -688,8 +688,7 @@ DD_IN_PROGRESS
   → RISK_ASSESSMENT_PENDING           (admin clicks "Close Questionnaire" — manual close without vendor submission)
 
 RISK_ASSESSMENT_PENDING
-  → CLOSED                            (admin finalises risk assessment AND NDA + SOW present)
-  → PENDING_CLOSURE                   (admin finalises risk assessment AND NDA or SOW missing)
+  → PENDING_CLOSURE                   (admin finalises risk assessment — always; close is manual)
   → DD_IN_PROGRESS                    (admin clicks "Reopen Questionnaire")
 
 PENDING_CLOSURE
