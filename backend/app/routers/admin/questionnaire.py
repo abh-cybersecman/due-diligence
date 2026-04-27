@@ -240,6 +240,7 @@ async def save_draft(
 
     summary = SaveDraftSummary()
     warnings: list[str] = []
+    response_type_change_mints: list[dict[str, str]] = []
 
     # ---- Deletes first so MAX(question_number) is accurate for new rows ----
     sections_to_delete = [
@@ -355,6 +356,7 @@ async def save_draft(
                 await db.flush()
                 next_question_number += 1
                 summary.questions_created += 1
+                summary.question_keys_minted += 1
                 current_options: list[QuestionOption] = []
             else:
                 question = existing_questions[q_in.id]
@@ -379,9 +381,15 @@ async def save_draft(
 
                 # Response-type change mints a new key (refresh-matching).
                 if question.response_type != q_in.response_type:
+                    old_key = question.question_key
                     question.response_type = q_in.response_type
                     question.question_key = _mint_question_key()
                     summary.question_keys_minted += 1
+                    response_type_change_mints.append({
+                        "question_id": str(question.id),
+                        "old_key": old_key,
+                        "new_key": question.question_key,
+                    })
                     warnings.append(
                         f"Q{question.question_number}: response type changed — "
                         "a new question_key was minted. This question will be "
@@ -469,6 +477,9 @@ async def save_draft(
             summary.options_deleted,
         ]
     ):
+        metadata = summary.model_dump()
+        if response_type_change_mints:
+            metadata["response_type_change_mints"] = response_type_change_mints
         await log_action(
             db,
             actor=admin,
@@ -486,7 +497,7 @@ async def save_draft(
                 f"~{summary.options_edited}/"
                 f"-{summary.options_deleted})"
             ),
-            metadata=summary.model_dump(),
+            metadata=metadata,
         )
 
     refreshed = await _load_version_detail(db, draft_id)
