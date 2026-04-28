@@ -194,6 +194,7 @@ class RevisionSibling(BaseModel):
     id: uuid.UUID
     doc_number: str
     status: EngagementStatus
+    created_at: datetime
     submitted_at: Optional[datetime] = None
     closed_at: Optional[datetime] = None
     cancelled_at: Optional[datetime] = None

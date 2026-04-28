@@ -488,10 +488,6 @@ function LastRefreshRow({ engagement }) {
     'DRAFT', 'FUNCTIONAL_EVALUATION_PENDING', 'PENDING_DISPATCH',
     'DD_IN_PROGRESS', 'RISK_ASSESSMENT_PENDING', 'PENDING_CLOSURE', 'UNDER_REVIEW',
   ])
-  // RevisionSibling carries closed_at / cancelled_at but not created_at. For
-  // in-progress states the latest-after-R0 is always the engagement we're
-  // viewing (the redirect lands on latest non-cancelled), so we can fall
-  // back to engagement.created_at safely.
   let dateIso
   let suffix = `R${latest.revision_number}`
   if (latest.status === 'CANCELLED') {
@@ -499,7 +495,7 @@ function LastRefreshRow({ engagement }) {
   } else if (latest.status === 'CLOSED') {
     dateIso = latest.closed_at
   } else if (IN_PROGRESS.has(latest.status)) {
-    dateIso = engagement.created_at
+    dateIso = latest.created_at
     suffix = `R${latest.revision_number} — in progress`
   }
 
