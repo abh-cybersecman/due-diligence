@@ -438,6 +438,7 @@ export default function VendorQuestionnaire({
               response_text: r.response_text ?? '',
               selected_options: r.selected_options ?? [],
               other_text: r.other_text ?? '',
+              updated_at: r.updated_at ?? null,
             }
           }
           setResponses(responseMap)
@@ -493,10 +494,14 @@ export default function VendorQuestionnaire({
     if (saveStatus !== 'error') setSaveStatus('idle')
   }
 
+  function touch(cur) {
+    return { ...cur, updated_at: new Date().toISOString() }
+  }
+
   function handleTextChange(questionId, value) {
     setResponses((prev) => {
       const cur = prev[questionId] ?? {}
-      const next = { ...cur, response_text: value }
+      const next = touch({ ...cur, response_text: value })
       markPending(questionId, next)
       return { ...prev, [questionId]: next }
     })
@@ -505,12 +510,12 @@ export default function VendorQuestionnaire({
   function handleSingleChoice(questionId, optionLabel) {
     setResponses((prev) => {
       const cur = prev[questionId] ?? {}
-      const next = {
+      const next = touch({
         ...cur,
         selected_options: [optionLabel],
         // Clear other_text unless the new selection is __other__
         other_text: optionLabel === '__other__' ? (cur.other_text ?? '') : '',
-      }
+      })
       markPending(questionId, next)
       return { ...prev, [questionId]: next }
     })
@@ -522,11 +527,11 @@ export default function VendorQuestionnaire({
       const set = new Set(cur.selected_options ?? [])
       if (checked) set.add(optionLabel); else set.delete(optionLabel)
       const selected = Array.from(set)
-      const next = {
+      const next = touch({
         ...cur,
         selected_options: selected,
         other_text: selected.includes('__other__') ? (cur.other_text ?? '') : '',
-      }
+      })
       markPending(questionId, next)
       return { ...prev, [questionId]: next }
     })
@@ -535,7 +540,7 @@ export default function VendorQuestionnaire({
   function handleOtherTextChange(questionId, value) {
     setResponses((prev) => {
       const cur = prev[questionId] ?? {}
-      const next = { ...cur, other_text: value }
+      const next = touch({ ...cur, other_text: value })
       markPending(questionId, next)
       return { ...prev, [questionId]: next }
     })
@@ -802,7 +807,16 @@ export default function VendorQuestionnaire({
               </div>
 
               <div className="card" style={s.sectionCard}>
-                {section.questions.map((question, idx) => (
+                {section.questions.map((question, idx) => {
+                  const r = responses[question.id]
+                  const isCarriedOver =
+                    !!meta?.parent_doc_number &&
+                    !!meta?.created_at &&
+                    !!r?.updated_at &&
+                    Math.abs(
+                      new Date(r.updated_at).getTime() - new Date(meta.created_at).getTime()
+                    ) <= 1000
+                  return (
                   <React.Fragment key={question.id}>
                     {idx > 0 && <div style={s.questionDivider} />}
                     <div style={s.questionRow}>
@@ -816,6 +830,11 @@ export default function VendorQuestionnaire({
                         <p style={s.questionText}>{question.question_text}</p>
                         {question.hint_text && (
                           <p style={s.questionHint}>{question.hint_text}</p>
+                        )}
+                        {isCarriedOver && (
+                          <p style={s.carriedOverNote}>
+                            Carried over from {meta.parent_doc_number} — please review
+                          </p>
                         )}
 
                         {question.response_type === 'FILE_UPLOAD' ? (
@@ -861,7 +880,8 @@ export default function VendorQuestionnaire({
                       </div>
                     </div>
                   </React.Fragment>
-                ))}
+                  )
+                })}
               </div>
             </section>
           ))}
@@ -1056,6 +1076,13 @@ const s = {
   questionHint: {
     fontSize: 'var(--text-xs)', color: 'var(--text-muted)', lineHeight: 1.5,
     marginTop: -6,
+  },
+  carriedOverNote: {
+    fontSize: 'var(--text-xs)',
+    color: 'var(--risk-medium)',
+    lineHeight: 1.5,
+    marginTop: -4,
+    fontStyle: 'italic',
   },
   textarea: {
     width: '100%', minHeight: 100,

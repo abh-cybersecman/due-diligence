@@ -55,6 +55,8 @@ class EngagementFormOut(BaseModel):
     version_label: str
     sections: List[QuestionnaireSectionSchema]
     files: List[VendorFileOut]
+    created_at: datetime
+    parent_doc_number: Optional[str] = None
 
 
 class SubmitOut(BaseModel):

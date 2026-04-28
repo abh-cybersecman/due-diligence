@@ -28,6 +28,7 @@ from app.schemas.engagement import (
     EngagementResponsesPayload,
     EngagementUpdate,
     IRDocumentOut,
+    RefreshEngagementRequest,
     ResponseEntry,
     SetStatusRequest,
     VendorAttachmentEntry,
@@ -58,7 +59,14 @@ async def _get_engagement_or_404(db: AsyncSession, engagement_id: uuid.UUID) -> 
 
 
 async def _generate_doc_number(db: AsyncSession) -> str:
-    result = await db.execute(select(func.max(Engagement.doc_number)))
+    """Compute the next original doc_number. Refresh rows (-R*) are excluded
+    from the sequence — only originals (parent_engagement_id IS NULL) participate.
+    """
+    result = await db.execute(
+        select(func.max(Engagement.doc_number)).where(
+            Engagement.parent_engagement_id.is_(None)
+        )
+    )
     max_doc: str | None = result.scalar_one_or_none()
     if max_doc is None:
         next_num = settings.doc_number_start
@@ -69,6 +77,88 @@ async def _generate_doc_number(db: AsyncSession) -> str:
         except (ValueError, IndexError):
             next_num = settings.doc_number_start
     return f"{settings.doc_number_prefix}{str(next_num).zfill(4)}"
+
+
+async def _find_root_and_family(
+    db: AsyncSession, engagement: Engagement
+) -> tuple[Engagement, list[Engagement]]:
+    """Walk parent_engagement_id up to the root, then BFS down to gather
+    every transitive descendant. Returns (root, family) where family includes
+    the root.
+    """
+    root = engagement
+    visited: set[uuid.UUID] = {engagement.id}
+    while root.parent_engagement_id is not None:
+        if root.parent_engagement_id in visited:
+            break  # defensive: should never happen, would be a cycle
+        result = await db.execute(
+            select(Engagement).where(Engagement.id == root.parent_engagement_id)
+        )
+        parent = result.scalar_one_or_none()
+        if parent is None:
+            break
+        visited.add(parent.id)
+        root = parent
+
+    family_ids: set[uuid.UUID] = {root.id}
+    frontier: list[uuid.UUID] = [root.id]
+    while frontier:
+        result = await db.execute(
+            select(Engagement.id).where(
+                Engagement.parent_engagement_id.in_(frontier)
+            )
+        )
+        new_ids: list[uuid.UUID] = []
+        for row in result.all():
+            eid = row[0]
+            if eid not in family_ids:
+                family_ids.add(eid)
+                new_ids.append(eid)
+        frontier = new_ids
+
+    fam_result = await db.execute(
+        select(Engagement)
+        .where(Engagement.id.in_(family_ids))
+        .options(selectinload(Engagement.operating_companies))
+    )
+    family = list(fam_result.scalars().all())
+    return root, family
+
+
+def _latest_in_family(family: list[Engagement]) -> Engagement:
+    return max(family, key=lambda e: e.revision_number)
+
+
+async def _build_revision_meta(
+    db: AsyncSession, engagement: Engagement
+) -> dict:
+    """Compute revision metadata for an engagement detail response."""
+    root, family = await _find_root_and_family(db, engagement)
+    latest = _latest_in_family(family)
+
+    parent_doc_number: str | None = None
+    if engagement.parent_engagement_id is not None:
+        for member in family:
+            if member.id == engagement.parent_engagement_id:
+                parent_doc_number = member.doc_number
+                break
+
+    is_latest = engagement.id == latest.id
+    return {
+        "is_latest_revision": is_latest,
+        "latest_revision_id": None if is_latest else latest.id,
+        "latest_revision_doc_number": None if is_latest else latest.doc_number,
+        "root_doc_number": root.doc_number,
+        "parent_doc_number": parent_doc_number,
+    }
+
+
+async def _serialize_with_meta(
+    db: AsyncSession, engagement: Engagement
+) -> EngagementResponse:
+    payload = EngagementResponse.model_validate(engagement)
+    meta = await _build_revision_meta(db, engagement)
+    return payload.model_copy(update=meta)
 
 
 async def _load_ocs(db: AsyncSession, oc_ids: list[uuid.UUID]) -> list[OperatingCompany]:
@@ -191,8 +281,9 @@ async def get_engagement(
     admin: str = Depends(get_admin_user),
     db: AsyncSession = Depends(get_db),
 ) -> EngagementResponse:
-    engagement = await _get_engagement_or_404(db, engagement_id)
-    return EngagementResponse.model_validate(engagement)
+    await _get_engagement_or_404(db, engagement_id)
+    engagement = await _fetch_engagement(db, engagement_id)
+    return await _serialize_with_meta(db, engagement)
 
 
 @router.patch("/engagements/{engagement_id}", response_model=EngagementResponse)
@@ -454,6 +545,184 @@ async def reopen_from_cancelled(
 
     await db.flush()
     return EngagementResponse.model_validate(await _fetch_engagement(db, engagement_id))
+
+
+# ---------------------------------------------------------------------------
+# Refresh — create a new revision (R1, R2, …) from a closed engagement
+# ---------------------------------------------------------------------------
+
+REFRESHABLE_STATUSES = {EngagementStatus.CLOSED, EngagementStatus.UNDER_REVIEW}
+
+
+@router.post("/engagements/{engagement_id}/refresh", response_model=EngagementResponse)
+async def refresh_engagement(
+    engagement_id: uuid.UUID,
+    body: RefreshEngagementRequest,
+    admin: str = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+) -> EngagementResponse:
+    """Create a new revision (R1, R2, …) from a CLOSED or UNDER_REVIEW engagement.
+
+    Pre-fills responses for questions whose `question_key` matches between the
+    source engagement's pinned version and the current published version, when
+    response types also match. The new engagement gets fresh tokens, an empty
+    risk assessment slot, and starts at DRAFT status.
+    """
+    source = await _get_engagement_or_404(db, engagement_id)
+
+    if source.status not in REFRESHABLE_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Refresh is only allowed from CLOSED or UNDER_REVIEW status "
+                f"(current: {source.status.value})"
+            ),
+        )
+
+    if not settings.admin_password_hash or not verify_password(
+        body.password, settings.admin_password_hash
+    ):
+        raise HTTPException(status_code=403, detail="Incorrect password")
+
+    # Re-fetch source with operating_companies eagerly loaded for the copy.
+    source = await _fetch_engagement(db, engagement_id)
+
+    root, family = await _find_root_and_family(db, source)
+    latest = _latest_in_family(family)
+    if source.id != latest.id:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Refresh is only allowed on the latest revision in the family "
+                f"(latest is {latest.doc_number})"
+            ),
+        )
+
+    next_rev = max(member.revision_number for member in family) + 1
+    new_doc_number = f"{root.doc_number}-R{next_rev}"
+
+    # Pin to the current published version (not the source's version).
+    current_version_row = (
+        await db.execute(
+            select(QuestionnaireVersion).where(QuestionnaireVersion.is_current.is_(True))
+        )
+    ).scalar_one_or_none()
+    if current_version_row is None:
+        raise HTTPException(
+            status_code=500,
+            detail="No current questionnaire version is published",
+        )
+
+    source_version_row = (
+        await db.execute(
+            select(QuestionnaireVersion).where(
+                QuestionnaireVersion.id == source.questionnaire_version_id
+            )
+        )
+    ).scalar_one()
+
+    new_engagement = Engagement(
+        doc_number=new_doc_number,
+        application_name=source.application_name,
+        vendor_emails=list(source.vendor_emails or []),
+        ir_emails=list(source.ir_emails or []),
+        is_ai_application=source.is_ai_application,
+        internal_notes="",
+        status=EngagementStatus.DRAFT,
+        questionnaire_version_id=current_version_row.id,
+        parent_engagement_id=source.id,
+        revision_number=next_rev,
+        vendor_token=uuid.uuid4(),
+        ir_token=uuid.uuid4(),
+    )
+    new_engagement.operating_companies = list(source.operating_companies)
+    db.add(new_engagement)
+    await db.flush()
+
+    # ---- Pre-fill responses by matching question_key across versions -------
+    new_questions = (
+        await db.execute(
+            select(Question).where(Question.version_id == current_version_row.id)
+        )
+    ).scalars().all()
+
+    source_questions = (
+        await db.execute(
+            select(Question).where(Question.version_id == source.questionnaire_version_id)
+        )
+    ).scalars().all()
+    source_by_key: dict[str, Question] = {q.question_key: q for q in source_questions}
+
+    source_responses = (
+        await db.execute(
+            select(Response).where(Response.engagement_id == source.id)
+        )
+    ).scalars().all()
+    source_resp_by_qid: dict[uuid.UUID, Response] = {
+        r.question_id: r for r in source_responses
+    }
+
+    new_keys = {q.question_key for q in new_questions}
+    source_keys = set(source_by_key.keys())
+
+    new_question_count = len(new_keys - source_keys)
+    removed_question_count = len(source_keys - new_keys)
+    carried_count = 0
+
+    now = datetime.now(timezone.utc)
+    new_engagement.created_at = now
+    for new_q in new_questions:
+        src_q = source_by_key.get(new_q.question_key)
+        if src_q is None:
+            continue
+        if src_q.response_type != new_q.response_type:
+            continue
+        src_r = source_resp_by_qid.get(src_q.id)
+        if src_r is None:
+            continue
+        # Treat as "non-empty" if any of the saved fields contain a value.
+        has_text = bool((src_r.response_text or "").strip())
+        has_options = bool(src_r.selected_options)
+        has_other = bool((src_r.other_text or "").strip())
+        if not (has_text or has_options or has_other):
+            continue
+        copied = Response(
+            engagement_id=new_engagement.id,
+            question_id=new_q.id,
+            response_text=src_r.response_text,
+            selected_options=list(src_r.selected_options) if src_r.selected_options else None,
+            other_text=src_r.other_text,
+            updated_at=now,
+        )
+        db.add(copied)
+        carried_count += 1
+
+    await log_action(
+        db,
+        actor=admin,
+        actor_type=ActorType.ADMIN,
+        action="engagement.refreshed",
+        description=(
+            f"Engagement {source.doc_number} refreshed → {new_doc_number} "
+            f"({carried_count} response(s) carried over)"
+        ),
+        engagement_id=new_engagement.id,
+        metadata={
+            "source_id": str(source.id),
+            "source_doc_number": source.doc_number,
+            "source_version": source_version_row.version_label,
+            "new_id": str(new_engagement.id),
+            "new_doc_number": new_doc_number,
+            "new_version": current_version_row.version_label,
+            "carried_count": carried_count,
+            "new_question_count": new_question_count,
+            "removed_question_count": removed_question_count,
+        },
+    )
+
+    await db.flush()
+    fresh = await _fetch_engagement(db, new_engagement.id)
+    return await _serialize_with_meta(db, fresh)
 
 
 @router.post("/engagements/{engagement_id}/set-status", response_model=EngagementResponse)

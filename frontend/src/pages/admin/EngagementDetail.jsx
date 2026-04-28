@@ -121,6 +121,69 @@ function AIButton({ label, tooltip }) {
   )
 }
 
+// ── Refresh engagement modal ───────────────────────────────────────────────────
+
+function RefreshEngagementModal({ engagement, apiFetch, onSuccess, onClose }) {
+  const [password, setPassword] = useState('')
+  const [error, setError] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const inputRef = useRef(null)
+
+  useEffect(() => { inputRef.current?.focus() }, [])
+
+  async function handleSubmit(e) {
+    e.preventDefault()
+    if (!password) { setError('Password is required'); return }
+    setSubmitting(true)
+    setError('')
+    try {
+      const res = await apiFetch(`/api/admin/engagements/${engagement.id}/refresh`, {
+        method: 'POST',
+        body: JSON.stringify({ password }),
+      })
+      if (res.status === 403) { setError('Incorrect password'); return }
+      if (!res.ok) { const d = await res.json().catch(() => ({})); setError(d.detail || 'Refresh failed'); return }
+      const data = await res.json()
+      onSuccess(data)
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return ReactDOM.createPortal(
+    <div style={modalStyles.overlay} onClick={onClose}>
+      <div style={modalStyles.dialog} onClick={e => e.stopPropagation()}>
+        <h3 style={modalStyles.title}>Refresh Assessment</h3>
+        <p style={modalStyles.body}>
+          You are about to create a new revision of{' '}
+          <strong style={{ color: 'var(--text-primary)' }}>{engagement.doc_number} — {engagement.application_name}</strong>.
+          {' '}A new engagement will be created using the current published questionnaire version, with matching responses pre-filled from this engagement. This engagement remains unchanged. Enter your admin password to confirm.
+        </p>
+        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <input
+            ref={inputRef}
+            type="password"
+            value={password}
+            onChange={e => setPassword(e.target.value)}
+            placeholder="Admin password"
+            className="input"
+            style={{ width: '100%' }}
+          />
+          {error && <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--risk-high)' }}>{error}</p>}
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+            <button type="button" className="btn btn-secondary" onClick={onClose} disabled={submitting}>Cancel</button>
+            <button type="submit" className="btn btn-primary" disabled={submitting}>
+              {submitting ? 'Refreshing…' : 'Refresh'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>,
+    document.body
+  )
+}
+
+
 // ── Cancel engagement modal ────────────────────────────────────────────────────
 
 function CancelEngagementModal({ engagement, apiFetch, onSuccess, onClose }) {
@@ -1325,6 +1388,7 @@ export default function EngagementDetail() {
   const [loading, setLoading] = useState(true)
   const [activeTab, setActiveTab] = useState('overview')
   const [actionError, setActionError] = useState('')
+  const [showRefreshModal, setShowRefreshModal] = useState(false)
 
   const loadEngagement = useCallback(async () => {
     const res = await apiFetch(`/api/admin/engagements/${id}`)
@@ -1378,6 +1442,9 @@ export default function EngagementDetail() {
   if (!engagement) return <AdminLayout><div style={{ padding: 48, color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>Engagement not found.</div></AdminLayout>
 
   const st = engagement.status
+  const canRefresh =
+    (st === 'CLOSED' || st === 'UNDER_REVIEW') && engagement.is_latest_revision === true
+  const isOlderRevision = engagement.is_latest_revision === false
 
   return (
     <AdminLayout>
@@ -1386,6 +1453,25 @@ export default function EngagementDetail() {
         <button className="btn btn-ghost" style={{ marginBottom: 12, color: 'var(--text-muted)', padding: 0 }} onClick={() => navigate('/admin/dashboard')}>
           ← Engagements
         </button>
+
+        {isOlderRevision && (
+          <div style={s.olderRevisionBanner}>
+            <span>
+              This is revision <strong>R{engagement.revision_number}</strong> of{' '}
+              <strong>{engagement.root_doc_number}</strong>. The latest revision is{' '}
+              <strong>{engagement.latest_revision_doc_number}</strong>.
+            </span>
+            {engagement.latest_revision_id && (
+              <button
+                className="btn btn-ghost"
+                style={{ padding: '0 6px', color: 'var(--accent)', fontWeight: 500 }}
+                onClick={() => navigate(`/admin/engagements/${engagement.latest_revision_id}`)}
+              >
+                View latest →
+              </button>
+            )}
+          </div>
+        )}
 
         {/* Header */}
         <div style={s.engHeader}>
@@ -1421,6 +1507,11 @@ export default function EngagementDetail() {
             {st === 'UNDER_REVIEW' && (
               <button className="btn btn-primary" onClick={() => doAction('smart-close')}>Close Engagement</button>
             )}
+            {canRefresh && (
+              <button className="btn btn-secondary" onClick={() => setShowRefreshModal(true)}>
+                Refresh Assessment
+              </button>
+            )}
             <button className="btn btn-secondary" onClick={handleExport}>Export Word</button>
           </div>
         </div>
@@ -1446,6 +1537,18 @@ export default function EngagementDetail() {
         {activeTab === 'responses' && <ResponsesTab engagementId={id} apiFetch={apiFetch} />}
         {activeTab === 'files' && <FilesTab engagementId={id} apiFetch={apiFetch} />}
         {activeTab === 'audit' && <AuditTab engagementId={id} apiFetch={apiFetch} />}
+
+        {showRefreshModal && (
+          <RefreshEngagementModal
+            engagement={engagement}
+            apiFetch={apiFetch}
+            onSuccess={(newEngagement) => {
+              setShowRefreshModal(false)
+              navigate(`/admin/engagements/${newEngagement.id}`)
+            }}
+            onClose={() => setShowRefreshModal(false)}
+          />
+        )}
       </div>
     </AdminLayout>
   )
@@ -1466,6 +1569,20 @@ const s = {
     border: '1px solid var(--risk-high)',
     borderRadius: 'var(--radius-sm)',
     padding: '9px 14px',
+  },
+
+  olderRevisionBanner: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    fontSize: 'var(--text-sm)',
+    color: 'var(--text-primary)',
+    background: 'var(--risk-medium-bg)',
+    border: '1px solid var(--risk-medium)',
+    borderRadius: 'var(--radius-sm)',
+    padding: '9px 14px',
+    marginBottom: 14,
   },
 
   // ─ tabs

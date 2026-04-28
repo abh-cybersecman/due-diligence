@@ -168,8 +168,21 @@ class EngagementResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     submitted_at: Optional[datetime] = None
+    questionnaire_version_id: Optional[uuid.UUID] = None
+    parent_engagement_id: Optional[uuid.UUID] = None
+    revision_number: int = 0
+    # Computed fields populated only on detail responses (None elsewhere).
+    is_latest_revision: Optional[bool] = None
+    latest_revision_id: Optional[uuid.UUID] = None
+    latest_revision_doc_number: Optional[str] = None
+    root_doc_number: Optional[str] = None
+    parent_doc_number: Optional[str] = None
 
 
 class EngagementListResponse(BaseModel):
     items: list[EngagementResponse]
     total: int
+
+
+class RefreshEngagementRequest(BaseModel):
+    password: str

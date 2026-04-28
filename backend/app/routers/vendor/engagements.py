@@ -111,6 +111,16 @@ async def get_form_metadata(
     )
     files = f_result.scalars().all()
 
+    parent_doc_number: str | None = None
+    if engagement.parent_engagement_id is not None:
+        parent_doc_number = (
+            await db.execute(
+                select(Engagement.doc_number).where(
+                    Engagement.id == engagement.parent_engagement_id
+                )
+            )
+        ).scalar_one_or_none()
+
     return EngagementFormOut(
         id=engagement.id,
         application_name=engagement.application_name,
@@ -120,6 +130,8 @@ async def get_form_metadata(
         version_label=version.version_label,
         sections=[QuestionnaireSectionSchema.model_validate(s) for s in sections],
         files=[VendorFileOut.model_validate(f) for f in files],
+        created_at=engagement.created_at,
+        parent_doc_number=parent_doc_number,
     )
 
 
