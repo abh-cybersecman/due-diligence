@@ -645,8 +645,10 @@ async def cancel_engagement(
         raise HTTPException(status_code=400, detail="Engagement is already cancelled")
 
     old_status = engagement.status
+    now = datetime.now(timezone.utc)
     engagement.status = EngagementStatus.CANCELLED
-    engagement.updated_at = datetime.now(timezone.utc)
+    engagement.cancelled_at = now
+    engagement.updated_at = now
 
     await log_action(
         db,
@@ -679,6 +681,7 @@ async def reopen_from_cancelled(
 
     old_status = engagement.status
     engagement.status = EngagementStatus.DRAFT
+    engagement.cancelled_at = None
     engagement.updated_at = datetime.now(timezone.utc)
 
     await log_action(
@@ -899,8 +902,11 @@ async def set_status(
             )
 
     old_status = engagement.status
+    now = datetime.now(timezone.utc)
     engagement.status = body.status
-    engagement.updated_at = datetime.now(timezone.utc)
+    engagement.updated_at = now
+    if body.status == EngagementStatus.CLOSED:
+        engagement.closed_at = now
 
     await log_action(
         db,
@@ -943,8 +949,11 @@ async def close_engagement(
     target = EngagementStatus.CLOSED if (has_nda and has_sow) else EngagementStatus.PENDING_CLOSURE
 
     old_status = engagement.status
+    now = datetime.now(timezone.utc)
     engagement.status = target
-    engagement.updated_at = datetime.now(timezone.utc)
+    engagement.updated_at = now
+    if target == EngagementStatus.CLOSED:
+        engagement.closed_at = now
 
     await log_action(
         db,
@@ -1002,8 +1011,10 @@ async def close_from_pending(
         )
 
     old_status = engagement.status
+    now = datetime.now(timezone.utc)
     engagement.status = EngagementStatus.CLOSED
-    engagement.updated_at = datetime.now(timezone.utc)
+    engagement.closed_at = now
+    engagement.updated_at = now
 
     await log_action(
         db,

@@ -171,6 +171,8 @@ class EngagementResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     submitted_at: Optional[datetime] = None
+    closed_at: Optional[datetime] = None
+    cancelled_at: Optional[datetime] = None
     questionnaire_version_id: Optional[uuid.UUID] = None
     parent_engagement_id: Optional[uuid.UUID] = None
     revision_number: int = 0
@@ -193,6 +195,8 @@ class RevisionSibling(BaseModel):
     doc_number: str
     status: EngagementStatus
     submitted_at: Optional[datetime] = None
+    closed_at: Optional[datetime] = None
+    cancelled_at: Optional[datetime] = None
     revision_number: int
 
 

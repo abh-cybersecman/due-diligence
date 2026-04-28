@@ -1014,6 +1014,40 @@ function shortMonthYear(iso) {
   return d.toLocaleDateString('en-GB', { month: 'short', year: 'numeric' })
 }
 
+// Status-driven label for the revision pickers (Responses + Export). The
+// previous version used `submitted_at` as a state proxy, which mis-labelled
+// admin-closed-without-submission as "not submitted" while the status badge
+// correctly read "Closed". `status` is the authoritative state field; the
+// timestamp is a precise marker for the terminal states.
+function revisionStateLabel(rev) {
+  switch (rev.status) {
+    case 'DRAFT':
+      return 'not yet sent'
+    case 'FUNCTIONAL_EVALUATION_PENDING':
+      return 'awaiting IR documents'
+    case 'PENDING_DISPATCH':
+      return 'pending dispatch'
+    case 'DD_IN_PROGRESS':
+      return 'in progress'
+    case 'RISK_ASSESSMENT_PENDING':
+      return rev.submitted_at
+        ? `submitted ${shortMonthYear(rev.submitted_at)}`
+        : 'awaiting risk assessment'
+    case 'PENDING_CLOSURE':
+      return 'ready to close'
+    case 'CLOSED':
+      return rev.closed_at ? `closed ${shortMonthYear(rev.closed_at)}` : 'closed'
+    case 'UNDER_REVIEW':
+      return 'under review'
+    case 'CANCELLED':
+      return rev.cancelled_at
+        ? `cancelled ${shortMonthYear(rev.cancelled_at)}`
+        : 'cancelled'
+    default:
+      return rev.status
+  }
+}
+
 function ResponsesTab({ engagement, apiFetch }) {
   const engagementId = engagement.id
   const revisions = engagement.revisions || []
@@ -1089,14 +1123,14 @@ function ResponsesTab({ engagement, apiFetch }) {
               {sortedRevs.map(rev => {
                 const isLatest = rev.id === latestId
                 const cancelled = rev.status === 'CANCELLED'
-                const sub = rev.submitted_at ? `submitted ${shortMonthYear(rev.submitted_at)}` : 'not submitted'
-                const label = cancelled
-                  ? `R${rev.revision_number} (cancelled) — ${sub}`
+                const state = revisionStateLabel(rev)
+                const prefix = cancelled
+                  ? `R${rev.revision_number}`
                   : isLatest
-                    ? `R${rev.revision_number} (current) — ${sub}`
-                    : `R${rev.revision_number} — ${sub}`
+                    ? `R${rev.revision_number} (current)`
+                    : `R${rev.revision_number}`
                 return (
-                  <option key={rev.id} value={rev.id}>{label}</option>
+                  <option key={rev.id} value={rev.id}>{`${prefix} — ${state}`}</option>
                 )
               })}
             </select>
@@ -1109,7 +1143,7 @@ function ResponsesTab({ engagement, apiFetch }) {
           <span>
             Viewing historical responses from{' '}
             <strong>R{selectedRev?.revision_number}</strong>
-            {selectedRev?.submitted_at && ` (submitted ${shortMonthYear(selectedRev.submitted_at)})`}.
+            {selectedRev && ` (${revisionStateLabel(selectedRev)})`}.
             These are read-only.
           </span>
           <button
@@ -1517,7 +1551,6 @@ function ExportButton({ engagement, onExport }) {
           {sorted.map((rev) => {
             const isLatest = rev.id === latestId
             const cancelled = rev.status === 'CANCELLED'
-            const sub = rev.submitted_at ? `submitted ${shortMonthYear(rev.submitted_at)}` : 'not submitted'
             return (
               <div
                 key={rev.id}
@@ -1532,10 +1565,9 @@ function ExportButton({ engagement, onExport }) {
               >
                 <div style={{ fontWeight: 500 }}>
                   {rev.doc_number}
-                  {cancelled && <span style={{ marginLeft: 6 }}>(cancelled)</span>}
                   {isLatest && !cancelled && <span style={{ marginLeft: 6, color: 'var(--text-muted)', fontWeight: 400 }}>(current)</span>}
                 </div>
-                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>{sub}</div>
+                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>{revisionStateLabel(rev)}</div>
               </div>
             )
           })}
