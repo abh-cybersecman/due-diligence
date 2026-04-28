@@ -10,7 +10,7 @@ Information Security Due Diligence portal for ABH IT. Replaces the email-based v
 
 **Engagement management**
 - Create engagements for applications undergoing due diligence. Each engagement gets an auto-generated document number (`ABHIT-IST-DD-XXXX`), unique vendor and IR access tokens, and can be tagged to one or more Operating Companies.
-- Dashboard with search-by-name and status filters; paginated table showing document number, application, OCs, status badge, AI flag, created/submitted dates.
+- **Dashboard** with search-by-name, status filter, and paginated table. Defaults to **grouped-by-family** view: each row represents one engagement family (the latest revision), with a chevron that expands to show every prior revision (R0, R1, …) as sub-rows; the parent row's status reflects the latest revision. A "Show all revisions as separate rows" toggle switches to a flat view (one row per engagement) and persists across sessions in `localStorage`. Cancelled revisions are rendered muted in the expanded sub-rows.
 - Inline editing of engagement metadata including application name, OC associations, vendor/IR email lists, and internal notes.
 
 **Lifecycle state machine**
@@ -18,7 +18,8 @@ The engagement moves through a defined set of statuses, with transitions enforce
 
 ```
 DRAFT
-  → FUNCTIONAL_EVALUATION_PENDING    (admin triggers manually)
+  → FUNCTIONAL_EVALUATION_PENDING    (admin triggers manually — new engagements only)
+  → DD_IN_PROGRESS                   (refresh engagements only — admin clicks "Dispatch to Vendor")
   → PENDING_DISPATCH                 (automatic: IR uploads functional evaluation)
   → DD_IN_PROGRESS                   (admin clicks "Dispatch to Vendor")
   → RISK_ASSESSMENT_PENDING          (automatic: vendor submits, or admin clicks "Close Questionnaire")
@@ -35,10 +36,21 @@ CANCELLED  → DRAFT                   (admin reopens — yes/no confirmation)
 
 `PENDING_CLOSURE` means the risk assessment has been finalised but NDA or SOW documents are still missing. The admin manually clicks **Close Engagement** once both documents are in place — this is enforced server-side and will return an error naming any missing documents. IR document uploads and deletes are permitted in this state. Once the engagement reaches `CLOSED`, the IR portal locks all document changes — the admin must move to `UNDER_REVIEW` first to re-enable them.
 
-`CANCELLED` can be set from any point in the lifecycle. It requires the admin to re-enter their password. A cancelled engagement can be reopened to `DRAFT` with a simple yes/no confirmation.
+For **refresh engagements** (revision_number > 0), the NDA / SOW close check walks the engagement family — coverage from any earlier revision (typically R0) satisfies the requirement, so a refresh with no fresh IR uploads can still close cleanly.
+
+`CANCELLED` can be set from any point in the lifecycle. It requires the admin to re-enter their password. A cancelled engagement can be reopened to `DRAFT` with a simple yes/no confirmation. Cancelled revisions are skipped when computing the family's "latest" revision (so cancelling R1 in a `[R0 CLOSED, R1]` family makes R0 the latest again, with the Refresh button re-enabled), and the next refresh always uses `MAX(revision_number) + 1` across the entire family — a cancelled R1 keeps its slot, the next refresh becomes R2, never R1.
 
 **Engagement Details panel**
 Vendor and IR email lists are editable inline — click Edit next to either field to enter edit mode. Add emails one at a time (Enter or Add button, with format validation and duplicate detection); remove individual emails via the chip × button; Save commits via `PATCH /api/admin/engagements/{id}`.
+
+For multi-revision families (revision_count > 1), the panel also surfaces:
+- **Last refresh** row — keyed on the latest revision after R0: shows `closed_at` for closed revisions, `cancelled_at` for cancelled, `created_at` with " — in progress" suffix for in-flight revisions. Format: `28 Apr 2026 (R2)` or `28 Apr 2026 (R2 — in progress)`.
+- **Revisions** block — a vertical stack of every revision in the family (latest first), each line showing the revision number, a status-driven label (e.g. "closed Apr 2026", "cancelled Apr 2026", "in progress"), and inline tags: `(current)` on the latest non-cancelled, `(original)` on R0. Cancelled rows are rendered in muted text.
+
+Single-revision engagements render none of these — the Overview looks unchanged for normal engagements.
+
+**Header redirect to latest revision**
+Opening any non-latest revision's URL (e.g. clicking R0 from a dashboard sub-row) immediately client-side replaces the URL with the family's latest revision and renders that revision's data. This keeps the page authoritative — admins always see the live state of the family. A small muted indicator next to the status badge reads `Revision R{N} · {N+1} of {total}` whenever the family has more than one revision.
 
 **Structured fields panel**
 Nine key technical fields extracted from the questionnaire responses (service type, hosting location, hyperscaler, DR location, data residency, encryption at rest/in transit, MFA support). All editable by admin at any lifecycle stage. "Extract with AI" button is present and will be wired to the Claude API in Phase 3.
@@ -52,14 +64,30 @@ Nine key technical fields extracted from the questionnaire responses (service ty
 - Engagements cannot be manually set to CLOSED without a finalised risk assessment.
 - "Generate with AI" button is present and will be wired to the Claude API in Phase 3.
 
+**Engagement Refresh (R1 / R2 / …)**
+Once an engagement is `CLOSED` or `UNDER_REVIEW`, the admin can create a new revision of it via the **Refresh Assessment** button. The button is only visible when the current view is the latest revision in its family.
+
+- A confirmation modal requires admin password re-entry.
+- The new engagement gets a `-R{n}` doc number suffix (e.g. `ABHIT-IST-DD-1001-R1`), fresh vendor and IR tokens, and is pinned to the **current published** questionnaire version (not the source's version).
+- Responses are pre-filled from the source by matching `question_key` across versions; if the response type changed, the response is treated as unmatched and not copied.
+- Refresh engagements skip the FE phase entirely. The lifecycle is `DRAFT → DD_IN_PROGRESS → RISK_ASSESSMENT_PENDING → PENDING_CLOSURE → CLOSED`. The DRAFT screen shows a single **Dispatch to Vendor** button rather than "Advance to IR Stage".
+- IR can still upload documents during a refresh via their token (e.g. NDA renewal, SOW addendum), but uploads do **not** advance the lifecycle.
+- Each revision has its own risk assessment, its own response set, and its own export — but files are unified across the family (see below).
+
 **Cancel Engagement**
 Any engagement can be cancelled from any lifecycle stage. The "Cancel Engagement" button (in red) sits between the Engagement Details and Structured Fields panels on the Overview tab. Clicking it opens a password confirmation modal — the admin must re-enter their password before the cancellation proceeds. The action is audit-logged. A cancelled engagement shows a "Reopen DD" button in the same position; clicking it (yes/no confirmation, no password) returns the engagement to `DRAFT` so it can progress through the lifecycle again.
 
 **File management**
-Admin can delete any file (IR documents or vendor attachments) from the Files tab regardless of engagement status. Clicking Delete opens a password confirmation modal — the admin must re-enter their password before the deletion proceeds. Deletions are permanent and audit-logged.
+The Files tab shows **all files across the engagement family** in a single unified list — IR documents and vendor attachments from R0 alongside anything uploaded during R1, R2, etc. Each row carries a revision badge (R0, R1, …) so the source revision is always visible. Default sort is upload date descending.
+
+- **Download** is enabled on every file in the family — admin can pull down R0's NDA from R1's URL just as easily as an R1-uploaded attachment.
+- **Delete** is gated to the latest revision only. Files belonging to prior revisions render with a disabled Delete button and a "Cannot delete files from a previous revision" tooltip; the backend independently rejects the call with 403 if anyone tries.
+- Deletion still requires admin password re-confirmation and is permanent + audit-logged.
 
 **Responses view**
 Read-only view of all vendor questionnaire answers, rendered from the engagement's pinned questionnaire version (so historical engagements show their original structure even after the questionnaire has changed). The version label is shown above the answer list. File upload questions show download links. All files are served through an authenticated endpoint — never directly from disk.
+
+For multi-revision families, a **revision dropdown** in the top-right of the Responses tab lets the admin switch between R0, R1, R2, etc. The selector defaults to the current revision; selecting a different one swaps the rendered tab content to that revision's pinned questionnaire version and its responses. When viewing anything other than the latest, a yellow strip above the questions reads "Viewing historical responses from R{N} ({state}). These are read-only." with a "Back to latest" link. Cancelled revisions appear in the dropdown muted with `(cancelled)`. The vendor and IR portals never expose this dropdown — they only ever see the revision tied to their token.
 
 **Audit log**
 Every action in the system is recorded: auth events, status transitions, file uploads/deletes, field edits, submissions. Viewable per-engagement and system-wide, with actor, action key, human-readable description, and JSONB metadata.
@@ -71,6 +99,9 @@ Generates a `.docx` file matching the Albatha DD template:
 - Executive Summary (Phase 3 scaffold)
 - Risk Assessment section (overall rating, summary, colour-coded risk register table)
 - Full questionnaire rendered from the engagement's pinned version's sections; AI addendum on a separate page when the engagement is AI-flagged; images embedded inline; PDFs noted with filename. Choice answers using `allows_other` render as `Other — {text}` (or just `Other` when no text was supplied)
+- **Supporting Documents** section listing every file uploaded on or before this revision (this revision plus all ancestor revisions in the family) with a `Revision` column tagging each file as `R0`, `R1`, etc. — so the reader can identify which assessment cycle each document belongs to.
+
+For multi-revision families, the **Export Word** button has a chevron dropdown listing every revision in the family. The plain button exports the current (latest) revision; selecting a sibling from the dropdown produces that revision's complete point-in-time snapshot — its pinned questionnaire version, its responses only (no carry-over from later revisions), its risk assessment, and family files up to that revision's closure. Cancelled revisions appear in the dropdown muted.
 
 **Settings**
 - Operating Companies list — add/edit/delete; used on the New Engagement form and appears in exports.
@@ -101,6 +132,7 @@ Accessed at `/due-diligence/evaluation/:token` — the token is generated when t
 - Uploading a Functional Evaluation automatically advances the engagement from `FUNCTIONAL_EVALUATION_PENDING` to `PENDING_DISPATCH`. The admin must then explicitly click **Dispatch to Vendor** to issue the questionnaire link.
 - The Functional Evaluation cannot be deleted once the questionnaire has been dispatched (`DD_IN_PROGRESS` or later). It can be replaced before dispatch if the wrong file was uploaded.
 - Document uploads and deletes are permitted in `PENDING_CLOSURE`. Once the admin clicks **Close Engagement**, the IR portal locks — no further changes until the admin moves the engagement to `UNDER_REVIEW`.
+- During a **refresh** (R1, R2, …) the IR can upload renewed documents (FE refresh, NDA renewal, SOW addendum) at any point in the refresh's active lifecycle. Refresh uploads do not auto-advance the engagement. The IR sees all family files in their portal (downloadable, badged with the source revision) but can only delete files they uploaded against the current revision.
 - Two-tab layout: **Pre-DD Documents** (upload) and **Vendor Responses** (read-only, visible from `DD_IN_PROGRESS` onwards). The Vendor Responses tab renders the engagement's pinned questionnaire version's full structure (including unanswered questions), labelled with the version (e.g. `v1.0`), and shows answers — including `Other — …` for choice-with-other responses — with last-updated timestamps.
 - Dark mode toggle; status badge in header.
 
@@ -218,7 +250,7 @@ docker compose up -d --build
 
 On first start, the backend will:
 1. Wait for PostgreSQL to be healthy
-2. Run `alembic upgrade head` — migration `0004_questionnaire_versioning` creates the `questionnaire_versions` / `questionnaire_sections` / `question_options` tables, seeds the initial published `v1.0` version with all 43 questions across 12 sections, pins any pre-existing engagements to `v1.0`, and clones a starter draft so the admin questionnaire editor is usable from day one
+2. Run `alembic upgrade head` — migration `0004_questionnaire_versioning` creates the `questionnaire_versions` / `questionnaire_sections` / `question_options` tables, seeds the initial published `v1.0` version with all 43 questions across 12 sections, pins any pre-existing engagements to `v1.0`, and clones a starter draft so the admin questionnaire editor is usable from day one. Migration `0005` adds the `previous_question_key` column for refresh-matching across response-type changes. Migration `0006` adds `closed_at` / `cancelled_at` columns on engagements (with a backfill that walks the audit log) so revision pickers can display precise terminal timestamps.
 3. Start uvicorn
 
 ### 6. Access the application
@@ -238,7 +270,7 @@ The backend API is also directly accessible at `http://localhost:8000/due-dilige
 3. Click **+ New Engagement** on the dashboard
 4. Fill in the application name, select OCs, enter vendor and IR email addresses
 5. Click **Create Engagement** — the engagement is created in DRAFT status with vendor and IR access tokens generated
-6. From the engagement detail page, click **Advance to IR Stage** to move to `FUNCTIONAL_EVALUATION_PENDING` and share the IR token link with the IR team
+6. From the engagement detail page, click **Advance to IR Stage** to move to `FUNCTIONAL_EVALUATION_PENDING` and share the IR token link with the IR team. (For an existing CLOSED engagement, click **Refresh Assessment** instead to start a new R1 — the refresh skips IR Stage and the DRAFT view shows a single **Dispatch to Vendor** button.)
 
 ---
 
@@ -289,7 +321,7 @@ If deploying without a WAF, admin and IR routes will be publicly accessible — 
 | Phase Q3 — Admin questionnaire editor (write, batched save) | Complete |
 | Phase Q4 — Publish flow, draft diff, version history | Complete |
 | Phase Q5 — Version-aware vendor / IR / admin / export rendering | Complete |
-| Phase Q6 — Engagement refresh (R1/R2) flow | Not started |
-| Phase Q7 — Dashboard revision grouping + Responses tab revision selector | Not started |
+| Phase Q6 — Engagement refresh (R1/R2) flow | Complete |
+| Phase Q7 — Dashboard grouping, revision-aware UI, refresh lifecycle, family file unification | Complete |
 | Phase 3 — Claude AI integration, email notifications, database backup | Not started |
 | Phase 4 — JSON/Word import | Not started |
