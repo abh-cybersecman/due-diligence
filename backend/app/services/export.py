@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.engagement import Engagement
+from app.models.file_upload import FileType, FileUpload
 from app.models.question import Question, ResponseType
 from app.models.questionnaire_section import QuestionnaireSection
 from app.models.response import Response
@@ -339,8 +340,79 @@ def _questionnaire(
 
 # ── Public API ─────────────────────────────────────────────────────────────────
 
+async def _gather_family_files(
+    db: AsyncSession, eng: Engagement
+) -> list[tuple[FileUpload, int, str]]:
+    """Return files from this engagement and all ancestor revisions in the
+    same family (revision_number <= eng.revision_number). Each tuple is
+    (file, revision_number, doc_number)."""
+    # Walk to root, collecting ancestors with revision_number <= eng.revision_number.
+    chain: list[Engagement] = [eng]
+    cur = eng
+    visited: set[uuid.UUID] = {eng.id}
+    while cur.parent_engagement_id is not None and cur.parent_engagement_id not in visited:
+        result = await db.execute(
+            select(Engagement).where(Engagement.id == cur.parent_engagement_id)
+        )
+        parent = result.scalar_one_or_none()
+        if parent is None:
+            break
+        visited.add(parent.id)
+        chain.append(parent)
+        cur = parent
+
+    chain_ids = [e.id for e in chain]
+    if not chain_ids:
+        return []
+
+    rev_by_id = {e.id: (e.revision_number, e.doc_number) for e in chain}
+    files_result = await db.execute(
+        select(FileUpload)
+        .where(FileUpload.engagement_id.in_(chain_ids))
+        .order_by(FileUpload.uploaded_at.desc())
+    )
+    out: list[tuple[FileUpload, int, str]] = []
+    for f in files_result.scalars().all():
+        rev_num, doc_num = rev_by_id.get(f.engagement_id, (0, ""))
+        out.append((f, rev_num, doc_num))
+    return out
+
+
+def _family_files_section(
+    doc: Document, file_rows: list[tuple[FileUpload, int, str]]
+) -> None:
+    if not file_rows:
+        return
+    doc.add_page_break()
+    _h1(doc, "5.  Supporting Documents")
+    p = doc.add_paragraph()
+    _run(
+        p,
+        "All files uploaded across this assessment and any prior revisions in the same family.",
+        italic=True,
+        size_pt=10,
+        color=_MUTED,
+    )
+    table = doc.add_table(rows=1, cols=4)
+    table.style = "Table Grid"
+    _table_header(table.rows[0], ["Revision", "Type", "File", "Uploaded"])
+    for f, rev_num, _doc_num in file_rows:
+        row = table.add_row().cells
+        row[0].text = f"R{rev_num}" if rev_num > 0 else "Original"
+        row[1].text = f.file_type.value if hasattr(f.file_type, "value") else str(f.file_type)
+        row[2].text = f.original_filename or ""
+        row[3].text = f.uploaded_at.strftime("%d %b %Y") if f.uploaded_at else ""
+
+
 async def generate_export(engagement_id: uuid.UUID, db: AsyncSession) -> bytes:
-    """Build Word export for an engagement. Returns raw .docx bytes."""
+    """Build Word export for an engagement. Returns raw .docx bytes.
+
+    The export is a complete point-in-time snapshot for this specific revision:
+    pinned questionnaire version, this engagement's responses, this engagement's
+    risk assessment, plus a Supporting Documents section enumerating all files
+    uploaded on or before this revision (i.e. across ancestor revisions in the
+    family) with revision badges.
+    """
 
     result = await db.execute(
         select(Engagement)
@@ -375,6 +447,8 @@ async def generate_export(engagement_id: uuid.UUID, db: AsyncSession) -> bytes:
         if f.question_id is not None:
             files_by_q.setdefault(f.question_id, []).append(f)
 
+    family_files = await _gather_family_files(db, eng)
+
     # Build document
     doc = Document()
     for section in doc.sections:
@@ -394,6 +468,7 @@ async def generate_export(engagement_id: uuid.UUID, db: AsyncSession) -> bytes:
     _risk_section(doc, eng.risk_assessment)
     doc.add_page_break()
     _questionnaire(doc, eng, sections, responses, files_by_q)
+    _family_files_section(doc, family_files)
 
     buf = io.BytesIO()
     doc.save(buf)

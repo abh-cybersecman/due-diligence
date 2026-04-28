@@ -55,6 +55,9 @@ class IRDocumentOut(BaseModel):
     file_size_bytes: int
     uploaded_by: str
     uploaded_at: datetime
+    # Family-aware fields (populated when files come from a multi-revision family)
+    engagement_id: Optional[uuid.UUID] = None
+    revision_number: Optional[int] = None
 
 
 class EngagementStatusOut(BaseModel):
@@ -177,6 +180,23 @@ class EngagementResponse(BaseModel):
     latest_revision_doc_number: Optional[str] = None
     root_doc_number: Optional[str] = None
     parent_doc_number: Optional[str] = None
+    revision_count: Optional[int] = None
+    # Sibling revisions in the family — populated only when group_by_family is on.
+    revisions: Optional[list["RevisionSibling"]] = None
+
+
+class RevisionSibling(BaseModel):
+    """Compact summary of one revision in a family — for grouped dashboard."""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    doc_number: str
+    status: EngagementStatus
+    submitted_at: Optional[datetime] = None
+    revision_number: int
+
+
+EngagementResponse.model_rebuild()
 
 
 class EngagementListResponse(BaseModel):

@@ -125,12 +125,13 @@ const themeToggleStyle = {
 
 // ─── UploadZone ──────────────────────────────────────────────────────────────
 
-function UploadZone({ docType, files, onUpload, onDelete, uploading, locked }) {
+function UploadZone({ docType, files, onUpload, onDelete, uploading, locked, currentEngagementId }) {
   const [dragOver, setDragOver] = useState(false)
   const inputRef = useRef(null)
 
   const matching = files.filter((f) => f.file_type === docType.key)
   const totalSize = matching.reduce((s, f) => s + f.file_size_bytes, 0)
+  const isOwnFile = (f) => !f.engagement_id || f.engagement_id === currentEngagementId
 
   function handleDrop(e) {
     e.preventDefault()
@@ -205,8 +206,11 @@ function UploadZone({ docType, files, onUpload, onDelete, uploading, locked }) {
             <div key={f.id} style={uploadZoneStyles.fileRow}>
               <span style={uploadZoneStyles.fileIcon}>📄</span>
               <span style={uploadZoneStyles.fileName}>{f.original_filename}</span>
+              {f.revision_number != null && f.revision_number > 0 && !isOwnFile(f) && (
+                <span style={uploadZoneStyles.revBadge}>R{f.revision_number}</span>
+              )}
               <span style={uploadZoneStyles.fileSize}>{formatBytes(f.file_size_bytes)}</span>
-              {!locked && (
+              {!locked && isOwnFile(f) && (
                 <button
                   style={uploadZoneStyles.deleteBtn}
                   onClick={() => onDelete(f.id)}
@@ -249,6 +253,16 @@ const uploadZoneStyles = {
   fileIcon: { fontSize: 13, flexShrink: 0 },
   fileName: { fontSize: 'var(--text-sm)', color: 'var(--text-primary)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   fileSize: { fontSize: 'var(--text-xs)', color: 'var(--text-muted)', flexShrink: 0 },
+  revBadge: {
+    fontSize: 'var(--text-xs)',
+    background: 'var(--bg-muted)',
+    color: 'var(--text-secondary)',
+    borderRadius: 100,
+    padding: '1px 6px',
+    fontWeight: 600,
+    border: '1px solid var(--border)',
+    flexShrink: 0,
+  },
   deleteBtn: {
     background: 'transparent', border: 'none', color: 'var(--text-muted)',
     fontSize: 18, lineHeight: 1, cursor: 'pointer', padding: '0 2px',
@@ -750,6 +764,7 @@ function PortalContent({ token, session, onLogout }) {
                       onDelete={handleDelete}
                       uploading={uploading}
                       locked={isLocked}
+                      currentEngagementId={engagement?.id}
                     />
                   </React.Fragment>
                 ))}

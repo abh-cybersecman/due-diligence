@@ -253,7 +253,9 @@ What it does (single transaction):
 4. Audit log entry: `engagement.refreshed` with metadata `{source_doc_number, source_version, new_version, carried_response_count, new_question_count, removed_question_count}`.
 5. Return the new engagement. Frontend navigates to its detail page.
 
-The new engagement then progresses through its normal lifecycle (DRAFT → FUNCTIONAL_EVALUATION_PENDING → … → CLOSED) independently.
+The new engagement skips the FE phase. Its lifecycle is: DRAFT → DD_IN_PROGRESS → RISK_ASSESSMENT_PENDING → PENDING_CLOSURE → CLOSED. Admin dispatches directly to the vendor from DRAFT via `/dispatch`. IR can upload documents during the refresh via their token at any time, but uploads do not advance the lifecycle.
+
+NDA/SOW close validation for refreshes walks the family — coverage from any earlier revision (typically R0) satisfies the requirement, so a refresh with no IR uploads can still close cleanly.
 
 ### "Carried over" indicator
 
@@ -417,7 +419,15 @@ This feature is large. Implement in sequence. Each phase must build clean (`dock
 
 ## Out of Scope (Explicitly)
 
-- **Per-revision file inheritance** — R1 does not inherit vendor attachments or IR documents from R0. Each revision has its own file space. (Rationale: documents age out faster than responses; forcing fresh upload is the safer default.)
 - **Cross-revision risk item carry-over** — risk assessments are not pre-filled on refresh. Admin may copy-paste from the predecessor if desired, but the system does not automate it.
 - **Side-by-side revision comparison** — a "compare R1 and R2 responses" view is a future enhancement, not required now. The dropdown selector is sufficient.
 - **In-place text edits on published versions with history rendering** — if an admin corrects a typo on a published version's question text (allowed per Axiom 1), the correction applies to all engagements using that version. We do not reconstruct the as-of-dispatch text. The audit log is the record.
+
+## Family-Wide File Behaviour (Phase Q7)
+
+Files are presented across the engagement family rather than per-revision:
+
+- The admin **Files tab** lists all family files in a single unified view, each row badged with the revision (`R0`, `R1`, …) it was uploaded against. Default sort is upload date desc. Download is enabled for any file in the family. Delete is enabled only for files belonging to the latest revision; older-revision files are immutable.
+- The **IR portal** sees the same unified file list and can download/upload, but can only delete files attached to the revision tied to their token.
+- The **Word export** for revision R{N} contains R{N}'s pinned questionnaire, R{N}'s responses, R{N}'s risk assessment, and a **Supporting Documents** section listing all files from R{N} and any earlier revision in the family with revision badges.
+- **NDA/SOW** required for `CLOSED` are checked across the entire family for refresh engagements — coverage from R0 satisfies R1's close.

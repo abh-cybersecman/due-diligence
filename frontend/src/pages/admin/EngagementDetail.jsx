@@ -1008,15 +1008,29 @@ function renderAdminAnswer(question, response, attachments) {
   return null
 }
 
-function ResponsesTab({ engagementId, apiFetch }) {
+function shortMonthYear(iso) {
+  if (!iso) return ''
+  const d = new Date(iso)
+  return d.toLocaleDateString('en-GB', { month: 'short', year: 'numeric' })
+}
+
+function ResponsesTab({ engagement, apiFetch }) {
+  const engagementId = engagement.id
+  const revisions = engagement.revisions || []
+  // Latest is the engagement we're currently viewing (after the redirect).
+  const latestId = engagement.id
+  const [selectedId, setSelectedId] = useState(latestId)
   const [payload, setPayload] = useState(null)
   const [loading, setLoading] = useState(true)
 
+  useEffect(() => { setSelectedId(latestId) }, [latestId])
+
   useEffect(() => {
-    apiFetch(`/api/admin/engagements/${engagementId}/responses`)
+    setLoading(true)
+    apiFetch(`/api/admin/engagements/${selectedId}/responses`)
       .then(r => r.ok ? r.json() : null)
       .then(data => { setPayload(data); setLoading(false) })
-  }, [apiFetch, engagementId])
+  }, [apiFetch, selectedId])
 
   if (loading) return <div style={{ padding: 24, color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>Loading…</div>
 
@@ -1042,6 +1056,11 @@ function ResponsesTab({ engagementId, apiFetch }) {
   const sortedSections = [...(payload.sections || [])].sort((a, b) => a.order - b.order)
   const visibleSections = sortedSections.filter((s) => !s.is_ai_addendum || payload.is_ai_application)
 
+  const selectedRev = revisions.find(r => r.id === selectedId)
+  const isHistorical = selectedId !== latestId
+  const showDropdown = revisions.length > 1
+  const sortedRevs = [...revisions].sort((a, b) => b.revision_number - a.revision_number)
+
   if (visibleSections.length === 0) {
     return (
       <div style={s.tabContent}>
@@ -1054,9 +1073,55 @@ function ResponsesTab({ engagementId, apiFetch }) {
 
   return (
     <div style={s.tabContent}>
-      <div style={{ marginBottom: 12, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
-        Questionnaire version: <strong style={{ color: 'var(--text-secondary)' }}>{payload.version_label}</strong>
+      <div style={s.responsesHeader}>
+        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
+          Questionnaire version: <strong style={{ color: 'var(--text-secondary)' }}>{payload.version_label}</strong>
+        </div>
+        {showDropdown && (
+          <div style={s.revPicker}>
+            <label style={s.revPickerLabel}>Showing responses from:</label>
+            <select
+              className="input"
+              value={selectedId}
+              onChange={e => setSelectedId(e.target.value)}
+              style={{ height: 28, fontSize: 'var(--text-xs)', minWidth: 240 }}
+            >
+              {sortedRevs.map(rev => {
+                const isLatest = rev.id === latestId
+                const cancelled = rev.status === 'CANCELLED'
+                const sub = rev.submitted_at ? `submitted ${shortMonthYear(rev.submitted_at)}` : 'not submitted'
+                const label = cancelled
+                  ? `R${rev.revision_number} (cancelled) — ${sub}`
+                  : isLatest
+                    ? `R${rev.revision_number} (current) — ${sub}`
+                    : `R${rev.revision_number} — ${sub}`
+                return (
+                  <option key={rev.id} value={rev.id}>{label}</option>
+                )
+              })}
+            </select>
+          </div>
+        )}
       </div>
+
+      {isHistorical && (
+        <div style={s.historicalBanner}>
+          <span>
+            Viewing historical responses from{' '}
+            <strong>R{selectedRev?.revision_number}</strong>
+            {selectedRev?.submitted_at && ` (submitted ${shortMonthYear(selectedRev.submitted_at)})`}.
+            These are read-only.
+          </span>
+          <button
+            className="btn btn-ghost"
+            style={{ padding: '0 6px', color: 'var(--accent)', fontWeight: 500 }}
+            onClick={() => setSelectedId(latestId)}
+          >
+            Back to latest →
+          </button>
+        </div>
+      )}
+
       {visibleSections.map((section) => {
         const questions = [...(section.questions || [])].sort((a, b) => a.order - b.order)
         if (questions.length === 0) return null
@@ -1239,7 +1304,8 @@ const modalStyles = {
   body: { margin: 0, fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', lineHeight: 1.6 },
 }
 
-function FilesTab({ engagementId, apiFetch }) {
+function FilesTab({ engagement, apiFetch }) {
+  const engagementId = engagement.id
   const [files, setFiles] = useState([])
   const [loading, setLoading] = useState(true)
   const [downloading, setDownloading] = useState(null)
@@ -1275,8 +1341,11 @@ function FilesTab({ engagementId, apiFetch }) {
 
   if (loading) return <div style={{ padding: 24, color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>Loading…</div>
 
-  const irFiles = files.filter(f => IR_TYPES.includes(f.file_type))
-  const vendorFiles = files.filter(f => f.file_type === 'VENDOR_ATTACHMENT')
+  // Sort: uploaded_at desc.
+  const sorted = [...files].sort((a, b) => new Date(b.uploaded_at) - new Date(a.uploaded_at))
+  const irFiles = sorted.filter(f => IR_TYPES.includes(f.file_type))
+  const vendorFiles = sorted.filter(f => f.file_type === 'VENDOR_ATTACHMENT')
+  const showRevBadges = (engagement.revision_count || 1) > 1
 
   function FileTable({ items, emptyMsg }) {
     if (items.length === 0) return (
@@ -1287,6 +1356,7 @@ function FilesTab({ engagementId, apiFetch }) {
         <thead>
           <tr style={{ background: 'var(--bg-subtle)' }}>
             <th style={s.th}>Type</th>
+            {showRevBadges && <th style={{ ...s.th, width: 70 }}>Revision</th>}
             <th style={s.th}>Filename</th>
             <th style={s.th}>Size</th>
             <th style={s.th}>Uploaded By</th>
@@ -1295,38 +1365,59 @@ function FilesTab({ engagementId, apiFetch }) {
           </tr>
         </thead>
         <tbody>
-          {items.map((f, idx) => (
-            <tr key={f.id} style={{ background: idx % 2 === 0 ? 'var(--bg-surface)' : 'var(--bg-subtle)' }}>
-              <td style={s.td}>
-                <span style={{ fontSize: 'var(--text-xs)', padding: '2px 7px', borderRadius: 100, background: 'var(--bg-muted)', color: 'var(--text-secondary)', fontWeight: 500 }}>
-                  {FILE_TYPE_LABELS[f.file_type] || f.file_type}
-                </span>
-              </td>
-              <td style={{ ...s.td, ...s.mono, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.original_filename}</td>
-              <td style={{ ...s.td, color: 'var(--text-secondary)' }}>{formatBytes(f.file_size_bytes)}</td>
-              <td style={{ ...s.td, color: 'var(--text-secondary)' }}>{f.uploaded_by}</td>
-              <td style={{ ...s.td, color: 'var(--text-secondary)' }}>{formatDate(f.uploaded_at)}</td>
-              <td style={{ ...s.td, textAlign: 'right' }}>
-                <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-                  <button
-                    className="btn btn-secondary"
-                    style={{ height: 26, padding: '0 10px', fontSize: 'var(--text-xs)' }}
-                    onClick={() => download(f)}
-                    disabled={downloading === f.id}
-                  >
-                    {downloading === f.id ? '…' : 'Download'}
-                  </button>
-                  <button
-                    className="btn btn-danger"
-                    style={{ height: 26, padding: '0 10px', fontSize: 'var(--text-xs)' }}
-                    onClick={() => setDeleteTarget(f)}
-                  >
-                    Delete
-                  </button>
-                </div>
-              </td>
-            </tr>
-          ))}
+          {items.map((f, idx) => {
+            const isCurrent = f.engagement_id === engagementId || f.engagement_id == null
+            return (
+              <tr key={f.id} style={{ background: idx % 2 === 0 ? 'var(--bg-surface)' : 'var(--bg-subtle)' }}>
+                <td style={s.td}>
+                  <span style={{ fontSize: 'var(--text-xs)', padding: '2px 7px', borderRadius: 100, background: 'var(--bg-muted)', color: 'var(--text-secondary)', fontWeight: 500 }}>
+                    {FILE_TYPE_LABELS[f.file_type] || f.file_type}
+                  </span>
+                </td>
+                {showRevBadges && (
+                  <td style={s.td}>
+                    <span style={s.fileRevBadge}>
+                      {f.revision_number != null ? `R${f.revision_number}` : '—'}
+                    </span>
+                  </td>
+                )}
+                <td style={{ ...s.td, ...s.mono, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.original_filename}</td>
+                <td style={{ ...s.td, color: 'var(--text-secondary)' }}>{formatBytes(f.file_size_bytes)}</td>
+                <td style={{ ...s.td, color: 'var(--text-secondary)' }}>{f.uploaded_by}</td>
+                <td style={{ ...s.td, color: 'var(--text-secondary)' }}>{formatDate(f.uploaded_at)}</td>
+                <td style={{ ...s.td, textAlign: 'right' }}>
+                  <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                    <button
+                      className="btn btn-secondary"
+                      style={{ height: 26, padding: '0 10px', fontSize: 'var(--text-xs)' }}
+                      onClick={() => download(f)}
+                      disabled={downloading === f.id}
+                    >
+                      {downloading === f.id ? '…' : 'Download'}
+                    </button>
+                    {isCurrent ? (
+                      <button
+                        className="btn btn-danger"
+                        style={{ height: 26, padding: '0 10px', fontSize: 'var(--text-xs)' }}
+                        onClick={() => setDeleteTarget(f)}
+                      >
+                        Delete
+                      </button>
+                    ) : (
+                      <button
+                        className="btn btn-danger"
+                        style={{ height: 26, padding: '0 10px', fontSize: 'var(--text-xs)', opacity: 0.45, cursor: 'not-allowed' }}
+                        disabled
+                        title="Cannot delete files from a previous revision"
+                      >
+                        Delete
+                      </button>
+                    )}
+                  </div>
+                </td>
+              </tr>
+            )
+          })}
         </tbody>
       </table>
     )
@@ -1368,6 +1459,92 @@ function FilesTab({ engagementId, apiFetch }) {
   )
 }
 
+// ── Export button with revision dropdown ─────────────────────────────────────
+
+function ExportButton({ engagement, onExport }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef(null)
+
+  useEffect(() => {
+    function outside(e) { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
+    document.addEventListener('mousedown', outside)
+    return () => document.removeEventListener('mousedown', outside)
+  }, [])
+
+  const revisions = engagement.revisions || []
+  const showDropdown = revisions.length > 1
+  const sorted = [...revisions].sort((a, b) => b.revision_number - a.revision_number)
+  const latestId = engagement.id
+
+  function pick(rev) {
+    setOpen(false)
+    onExport(rev.id, rev.doc_number)
+  }
+
+  if (!showDropdown) {
+    return (
+      <button className="btn btn-secondary" onClick={() => onExport()}>
+        Export Word
+      </button>
+    )
+  }
+
+  return (
+    <div ref={ref} style={{ position: 'relative', display: 'inline-flex' }}>
+      <button
+        className="btn btn-secondary"
+        onClick={() => onExport()}
+        style={{ borderTopRightRadius: 0, borderBottomRightRadius: 0 }}
+      >
+        Export Word
+      </button>
+      <button
+        className="btn btn-secondary"
+        onClick={() => setOpen(o => !o)}
+        title="Choose revision to export"
+        style={{
+          borderTopLeftRadius: 0,
+          borderBottomLeftRadius: 0,
+          borderLeftWidth: 0,
+          padding: '0 8px',
+          minWidth: 26,
+        }}
+      >
+        ▾
+      </button>
+      {open && (
+        <div style={s.exportDropdown}>
+          {sorted.map((rev) => {
+            const isLatest = rev.id === latestId
+            const cancelled = rev.status === 'CANCELLED'
+            const sub = rev.submitted_at ? `submitted ${shortMonthYear(rev.submitted_at)}` : 'not submitted'
+            return (
+              <div
+                key={rev.id}
+                style={{
+                  ...s.exportDropdownItem,
+                  color: cancelled ? 'var(--text-muted)' : 'var(--text-primary)',
+                  fontStyle: cancelled ? 'italic' : 'normal',
+                }}
+                onClick={() => pick(rev)}
+                onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-subtle)' }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
+              >
+                <div style={{ fontWeight: 500 }}>
+                  {rev.doc_number}
+                  {cancelled && <span style={{ marginLeft: 6 }}>(cancelled)</span>}
+                  {isLatest && !cancelled && <span style={{ marginLeft: 6, color: 'var(--text-muted)', fontWeight: 400 }}>(current)</span>}
+                </div>
+                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>{sub}</div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 const TABS = [
@@ -1398,8 +1575,20 @@ export default function EngagementDetail() {
 
   useEffect(() => { loadEngagement() }, [loadEngagement])
 
-  async function handleExport() {
-    const res = await fetch(`${BASE_PATH}/api/admin/engagements/${id}/export`, {
+  // If the user opened an older revision in a multi-revision family, redirect
+  // to the latest revision so the page always reflects current state. Single
+  // revision engagements skip this entirely.
+  useEffect(() => {
+    if (!engagement) return
+    if (engagement.is_latest_revision === false && engagement.latest_revision_id) {
+      navigate(`/admin/engagements/${engagement.latest_revision_id}`, { replace: true })
+    }
+  }, [engagement, navigate])
+
+  async function handleExport(targetId, targetDocNumber) {
+    const exportId = targetId || id
+    const exportName = targetDocNumber || engagement?.doc_number || 'export'
+    const res = await fetch(`${BASE_PATH}/api/admin/engagements/${exportId}/export`, {
       headers: { Authorization: `Bearer ${adminSession?.accessToken}` },
     })
     if (!res.ok) return
@@ -1407,7 +1596,7 @@ export default function EngagementDetail() {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `${engagement?.doc_number || 'export'}.docx`
+    a.download = `${exportName}.docx`
     a.click()
     URL.revokeObjectURL(url)
   }
@@ -1417,10 +1606,13 @@ export default function EngagementDetail() {
     let res
     if (type === 'advance') res = await apiFetch(`/api/admin/engagements/${id}/advance`, { method: 'POST', body: '{}' })
     else if (type === 'dispatch') {
-      const filesRes = await apiFetch(`/api/admin/engagements/${id}/files`)
-      const files = filesRes.ok ? await filesRes.json() : []
-      const hasFE = files.some(f => f.file_type === 'IR_FUNCTIONAL_EVALUATION')
-      if (!hasFE && !window.confirm('No functional evaluation has been uploaded.\n\nDispatch the questionnaire to the vendor anyway?')) return
+      const isRefresh = (engagement?.revision_number || 0) > 0
+      if (!isRefresh) {
+        const filesRes = await apiFetch(`/api/admin/engagements/${id}/files`)
+        const files = filesRes.ok ? await filesRes.json() : []
+        const hasFE = files.some(f => f.file_type === 'IR_FUNCTIONAL_EVALUATION')
+        if (!hasFE && !window.confirm('No functional evaluation has been uploaded.\n\nDispatch the questionnaire to the vendor anyway?')) return
+      } else if (!window.confirm(`Dispatch the questionnaire to the vendor for ${engagement.doc_number}?\n\nThe vendor will receive a re-assessment link.`)) return
       res = await apiFetch(`/api/admin/engagements/${id}/dispatch`, { method: 'POST', body: '{}' })
     }
     else if (type === 'reopen-dd') res = await apiFetch(`/api/admin/engagements/${id}/reopen`, { method: 'POST', body: '{}' })
@@ -1444,7 +1636,11 @@ export default function EngagementDetail() {
   const st = engagement.status
   const canRefresh =
     (st === 'CLOSED' || st === 'UNDER_REVIEW') && engagement.is_latest_revision === true
-  const isOlderRevision = engagement.is_latest_revision === false
+  const revisionCount = engagement.revision_count || 1
+  const showRevisionIndicator = revisionCount > 1
+  // The redirect above pushes any non-latest engagement to its latest sibling,
+  // so by the time we render we're always on the latest revision in the family.
+  const revisionPosition = revisionCount  // latest is the (revisionCount)-th of revisionCount
 
   return (
     <AdminLayout>
@@ -1454,31 +1650,17 @@ export default function EngagementDetail() {
           ← Engagements
         </button>
 
-        {isOlderRevision && (
-          <div style={s.olderRevisionBanner}>
-            <span>
-              This is revision <strong>R{engagement.revision_number}</strong> of{' '}
-              <strong>{engagement.root_doc_number}</strong>. The latest revision is{' '}
-              <strong>{engagement.latest_revision_doc_number}</strong>.
-            </span>
-            {engagement.latest_revision_id && (
-              <button
-                className="btn btn-ghost"
-                style={{ padding: '0 6px', color: 'var(--accent)', fontWeight: 500 }}
-                onClick={() => navigate(`/admin/engagements/${engagement.latest_revision_id}`)}
-              >
-                View latest →
-              </button>
-            )}
-          </div>
-        )}
-
         {/* Header */}
         <div style={s.engHeader}>
           <div style={s.engHeaderLeft}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
               <span style={s.mono2}>{engagement.doc_number}</span>
               <StatusBadge status={engagement.status} />
+              {showRevisionIndicator && (
+                <span style={s.revisionIndicator}>
+                  Revision R{engagement.revision_number} · {revisionPosition} of {revisionCount}
+                </span>
+              )}
             </div>
             <h1 style={s.engTitle}>{engagement.application_name}</h1>
             <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-muted)', marginTop: 2 }}>
@@ -1486,8 +1668,11 @@ export default function EngagementDetail() {
             </div>
           </div>
           <div style={s.engHeaderActions}>
-            {st === 'DRAFT' && (
+            {st === 'DRAFT' && engagement.revision_number === 0 && (
               <button className="btn btn-primary" onClick={() => doAction('advance')}>Advance to IR Stage</button>
+            )}
+            {st === 'DRAFT' && engagement.revision_number > 0 && (
+              <button className="btn btn-primary" onClick={() => doAction('dispatch')}>Dispatch to Vendor</button>
             )}
             {st === 'PENDING_DISPATCH' && (
               <button className="btn btn-primary" onClick={() => doAction('dispatch')}>Dispatch to Vendor</button>
@@ -1512,7 +1697,10 @@ export default function EngagementDetail() {
                 Refresh Assessment
               </button>
             )}
-            <button className="btn btn-secondary" onClick={handleExport}>Export Word</button>
+            <ExportButton
+              engagement={engagement}
+              onExport={handleExport}
+            />
           </div>
         </div>
 
@@ -1534,8 +1722,8 @@ export default function EngagementDetail() {
         {/* Tab content */}
         {activeTab === 'overview' && <OverviewTab engagement={engagement} apiFetch={apiFetch} onRefresh={loadEngagement} />}
         {activeTab === 'risk' && <RiskTab engagementId={id} apiFetch={apiFetch} onEngagementRefresh={loadEngagement} />}
-        {activeTab === 'responses' && <ResponsesTab engagementId={id} apiFetch={apiFetch} />}
-        {activeTab === 'files' && <FilesTab engagementId={id} apiFetch={apiFetch} />}
+        {activeTab === 'responses' && <ResponsesTab engagement={engagement} apiFetch={apiFetch} />}
+        {activeTab === 'files' && <FilesTab engagement={engagement} apiFetch={apiFetch} />}
         {activeTab === 'audit' && <AuditTab engagementId={id} apiFetch={apiFetch} />}
 
         {showRefreshModal && (
@@ -1571,7 +1759,32 @@ const s = {
     padding: '9px 14px',
   },
 
-  olderRevisionBanner: {
+  revisionIndicator: {
+    fontSize: 'var(--text-xs)',
+    color: 'var(--text-muted)',
+    fontWeight: 400,
+    marginLeft: 4,
+  },
+  responsesHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'flex-end',
+    gap: 12,
+    marginBottom: 12,
+    flexWrap: 'wrap',
+  },
+  revPicker: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'flex-end',
+    gap: 3,
+  },
+  revPickerLabel: {
+    fontSize: 'var(--text-xs)',
+    color: 'var(--text-muted)',
+    fontWeight: 500,
+  },
+  historicalBanner: {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -1583,6 +1796,34 @@ const s = {
     borderRadius: 'var(--radius-sm)',
     padding: '9px 14px',
     marginBottom: 14,
+  },
+  exportDropdown: {
+    position: 'absolute',
+    top: '100%',
+    right: 0,
+    marginTop: 4,
+    background: 'var(--bg-surface)',
+    border: '1px solid var(--border)',
+    borderRadius: 'var(--radius-md)',
+    boxShadow: 'var(--shadow-md)',
+    minWidth: 280,
+    zIndex: 60,
+    overflow: 'hidden',
+  },
+  exportDropdownItem: {
+    padding: '8px 14px',
+    fontSize: 'var(--text-sm)',
+    cursor: 'pointer',
+    transition: 'background-color 120ms ease',
+  },
+  fileRevBadge: {
+    fontSize: 'var(--text-xs)',
+    background: 'var(--bg-muted)',
+    color: 'var(--text-secondary)',
+    borderRadius: 100,
+    padding: '1px 7px',
+    fontWeight: 600,
+    border: '1px solid var(--border)',
   },
 
   // ─ tabs

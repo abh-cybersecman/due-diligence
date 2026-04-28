@@ -29,6 +29,7 @@ const STATUS_COLORS = {
 }
 
 const ALL_STATUSES = Object.keys(STATUS_LABELS)
+const FLAT_VIEW_KEY = 'isdd_dashboard_flat_view'
 
 function StatusBadge({ status }) {
   return (
@@ -61,6 +62,8 @@ export default function Dashboard() {
   const [search, setSearch] = useState('')
   const [searchInput, setSearchInput] = useState('')
   const [offset, setOffset] = useState(0)
+  const [flatView, setFlatView] = useState(() => localStorage.getItem(FLAT_VIEW_KEY) === '1')
+  const [expanded, setExpanded] = useState(() => new Set())
   const LIMIT = 50
 
   const apiFetch = useCallback(
@@ -81,6 +84,7 @@ export default function Dashboard() {
     const params = new URLSearchParams()
     if (statusFilter) params.set('status', statusFilter)
     if (search) params.set('search', search)
+    params.set('group_by_family', flatView ? 'false' : 'true')
     params.set('limit', LIMIT)
     params.set('offset', offset)
 
@@ -93,9 +97,28 @@ export default function Dashboard() {
       }
     } catch {}
     setLoading(false)
-  }, [apiFetch, statusFilter, search, offset])
+  }, [apiFetch, statusFilter, search, offset, flatView])
 
   useEffect(() => { loadEngagements() }, [loadEngagements])
+
+  function toggleFlatView() {
+    setFlatView(v => {
+      const next = !v
+      localStorage.setItem(FLAT_VIEW_KEY, next ? '1' : '0')
+      setOffset(0)
+      setExpanded(new Set())
+      return next
+    })
+  }
+
+  function toggleExpand(famId) {
+    setExpanded(prev => {
+      const next = new Set(prev)
+      if (next.has(famId)) next.delete(famId)
+      else next.add(famId)
+      return next
+    })
+  }
 
   function handleSearch(e) {
     e.preventDefault()
@@ -118,7 +141,7 @@ export default function Dashboard() {
         <div style={s.header}>
           <div>
             <h1 style={s.title}>Engagements</h1>
-            <p style={s.subtitle}>{total} total engagement{total !== 1 ? 's' : ''}</p>
+            <p style={s.subtitle}>{total} total {flatView ? 'engagement' : 'family'}{total !== 1 ? (flatView ? 's' : ' families') : ''}</p>
           </div>
           <button className="btn btn-primary" onClick={() => navigate('/admin/engagements/new')}>
             + New Engagement
@@ -150,10 +173,15 @@ export default function Dashboard() {
             onChange={e => handleStatusChange(e.target.value)}
           >
             <option value="">All statuses</option>
-            {ALL_STATUSES.map(s => (
-              <option key={s} value={s}>{STATUS_LABELS[s]}</option>
+            {ALL_STATUSES.map(st => (
+              <option key={st} value={st}>{STATUS_LABELS[st]}</option>
             ))}
           </select>
+
+          <label style={s.flatToggle}>
+            <input type="checkbox" checked={flatView} onChange={toggleFlatView} />
+            Show all revisions as separate rows
+          </label>
         </div>
 
         {/* Table */}
@@ -168,7 +196,8 @@ export default function Dashboard() {
             <table style={s.table}>
               <thead>
                 <tr style={s.thead}>
-                  <th style={{ ...s.th, width: 160 }}>Document #</th>
+                  <th style={{ ...s.th, width: 32 }}></th>
+                  <th style={{ ...s.th, width: 180 }}>Document #</th>
                   <th style={s.th}>Application</th>
                   <th style={s.th}>Operating Companies</th>
                   <th style={{ ...s.th, width: 190 }}>Status</th>
@@ -177,38 +206,93 @@ export default function Dashboard() {
                 </tr>
               </thead>
               <tbody>
-                {items.map((eng, idx) => (
-                  <tr
-                    key={eng.id}
-                    style={{
-                      ...s.tr,
-                      background: idx % 2 === 0 ? 'var(--bg-surface)' : 'var(--bg-subtle)',
-                    }}
-                    onClick={() => navigate(`/admin/engagements/${eng.id}`)}
-                  >
-                    <td style={s.td}>
-                      <div style={s.docCell}>
-                        <span style={s.docNum}>{eng.doc_number}</span>
-                        {eng.is_ai_application && (
-                          <div style={s.docBadgeRow}>
-                            <span style={s.aiBadge}>AI</span>
+                {items.map((eng, idx) => {
+                  const revCount = eng.revision_count || 1
+                  const grouped = !flatView && revCount > 1
+                  const isOpen = expanded.has(eng.id)
+                  return (
+                    <React.Fragment key={eng.id}>
+                      <tr
+                        style={{
+                          ...s.tr,
+                          background: idx % 2 === 0 ? 'var(--bg-surface)' : 'var(--bg-subtle)',
+                        }}
+                        onClick={() => navigate(`/admin/engagements/${eng.id}`)}
+                      >
+                        <td
+                          style={s.td}
+                          onClick={(e) => {
+                            if (grouped) { e.stopPropagation(); toggleExpand(eng.id) }
+                          }}
+                        >
+                          {grouped ? (
+                            <span style={s.chevron}>
+                              {isOpen ? '▾' : '▸'}
+                            </span>
+                          ) : null}
+                        </td>
+                        <td style={s.td}>
+                          <div style={s.docCell}>
+                            <span style={s.docNum}>{eng.doc_number}</span>
+                            <div style={s.docBadgeRow}>
+                              {eng.is_ai_application && (
+                                <span style={s.aiBadge}>AI</span>
+                              )}
+                              {grouped && (
+                                <span style={s.revBadge}>R{eng.revision_number}</span>
+                              )}
+                            </div>
                           </div>
-                        )}
-                      </div>
-                    </td>
-                    <td style={s.td}>
-                      <span style={s.appName}>{eng.application_name}</span>
-                    </td>
-                    <td style={{ ...s.td, color: 'var(--text-secondary)' }}>
-                      {eng.operating_companies.length > 0
-                        ? eng.operating_companies.map(oc => oc.name).join(', ')
-                        : <span style={{ color: 'var(--text-muted)' }}>—</span>}
-                    </td>
-                    <td style={s.td}><StatusBadge status={eng.status} /></td>
-                    <td style={{ ...s.td, color: 'var(--text-secondary)' }}>{formatDate(eng.created_at)}</td>
-                    <td style={{ ...s.td, color: 'var(--text-secondary)' }}>{formatDate(eng.submitted_at)}</td>
-                  </tr>
-                ))}
+                        </td>
+                        <td style={s.td}>
+                          <span style={s.appName}>{eng.application_name}</span>
+                        </td>
+                        <td style={{ ...s.td, color: 'var(--text-secondary)' }}>
+                          {eng.operating_companies.length > 0
+                            ? eng.operating_companies.map(oc => oc.name).join(', ')
+                            : <span style={{ color: 'var(--text-muted)' }}>—</span>}
+                        </td>
+                        <td style={s.td}><StatusBadge status={eng.status} /></td>
+                        <td style={{ ...s.td, color: 'var(--text-secondary)' }}>{formatDate(eng.created_at)}</td>
+                        <td style={{ ...s.td, color: 'var(--text-secondary)' }}>{formatDate(eng.submitted_at)}</td>
+                      </tr>
+                      {grouped && isOpen && (eng.revisions || [])
+                        .filter(rev => rev.id !== eng.id)
+                        .slice()
+                        .reverse()
+                        .map(rev => {
+                          const isCancelled = rev.status === 'CANCELLED'
+                          return (
+                            <tr
+                              key={rev.id}
+                              style={{
+                                ...s.tr,
+                                background: 'var(--bg-muted)',
+                                opacity: isCancelled ? 0.6 : 1,
+                              }}
+                              onClick={() => navigate(`/admin/engagements/${rev.id}`)}
+                            >
+                              <td style={s.td}></td>
+                              <td style={{ ...s.td, paddingLeft: 28 }}>
+                                <div style={s.docCell}>
+                                  <span style={{ ...s.docNum, color: 'var(--text-muted)' }}>{rev.doc_number}</span>
+                                  <div style={s.docBadgeRow}>
+                                    <span style={s.revBadge}>R{rev.revision_number}</span>
+                                    {isCancelled && <span style={s.cancelledBadge}>cancelled</span>}
+                                  </div>
+                                </div>
+                              </td>
+                              <td style={{ ...s.td, color: 'var(--text-muted)' }}>—</td>
+                              <td style={{ ...s.td, color: 'var(--text-muted)' }}>—</td>
+                              <td style={s.td}><StatusBadge status={rev.status} /></td>
+                              <td style={{ ...s.td, color: 'var(--text-muted)' }}>—</td>
+                              <td style={{ ...s.td, color: 'var(--text-muted)' }}>{formatDate(rev.submitted_at)}</td>
+                            </tr>
+                          )
+                        })}
+                    </React.Fragment>
+                  )
+                })}
               </tbody>
             </table>
           )}
@@ -257,6 +341,15 @@ const s = {
     flexWrap: 'wrap',
   },
   searchForm: { display: 'flex', gap: 8 },
+  flatToggle: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+    fontSize: 'var(--text-xs)',
+    color: 'var(--text-secondary)',
+    cursor: 'pointer',
+    marginLeft: 'auto',
+  },
 
   table: { width: '100%', borderCollapse: 'collapse' },
   thead: { background: 'var(--bg-subtle)' },
@@ -282,6 +375,14 @@ const s = {
     borderBottom: '1px solid var(--border)',
     verticalAlign: 'middle',
   },
+  chevron: {
+    fontSize: 'var(--text-sm)',
+    color: 'var(--text-secondary)',
+    cursor: 'pointer',
+    userSelect: 'none',
+    display: 'inline-block',
+    width: 12,
+  },
   docCell: {
     display: 'flex', flexDirection: 'column', gap: 4,
     alignItems: 'flex-start',
@@ -302,6 +403,20 @@ const s = {
     borderRadius: 100,
     padding: '1px 6px',
     fontWeight: 600,
+  },
+  revBadge: {
+    fontSize: 'var(--text-xs)',
+    background: 'var(--bg-muted)',
+    color: 'var(--text-secondary)',
+    borderRadius: 100,
+    padding: '1px 6px',
+    fontWeight: 600,
+    border: '1px solid var(--border)',
+  },
+  cancelledBadge: {
+    fontSize: 'var(--text-xs)',
+    color: 'var(--text-muted)',
+    fontStyle: 'italic',
   },
   appName: { fontWeight: 500 },
 

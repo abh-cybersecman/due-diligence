@@ -37,8 +37,20 @@ VALID_TRANSITIONS: dict[EngagementStatus, list[EngagementStatus]] = {
 }
 
 
-def validate_transition(from_status: EngagementStatus, to_status: EngagementStatus) -> None:
-    allowed = VALID_TRANSITIONS.get(from_status, [])
+def validate_transition(
+    from_status: EngagementStatus,
+    to_status: EngagementStatus,
+    *,
+    revision_number: int = 0,
+) -> None:
+    allowed = list(VALID_TRANSITIONS.get(from_status, []))
+    # Refresh engagements (revision_number > 0) skip FE/dispatch and go DRAFT → DD_IN_PROGRESS.
+    if (
+        revision_number > 0
+        and from_status == EngagementStatus.DRAFT
+        and EngagementStatus.DD_IN_PROGRESS not in allowed
+    ):
+        allowed.append(EngagementStatus.DD_IN_PROGRESS)
     if to_status not in allowed:
         raise HTTPException(
             status_code=400,

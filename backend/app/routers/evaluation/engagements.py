@@ -57,9 +57,63 @@ async def _get_engagement_for_ir(
     return engagement
 
 
+async def _walk_family_for_ir(
+    db: AsyncSession, engagement: Engagement
+) -> list[Engagement]:
+    """Walk parent_engagement_id up, then BFS down — same logic as admin side
+    but kept local so the evaluation router stays decoupled from admin.
+    """
+    root = engagement
+    visited: set[uuid.UUID] = {engagement.id}
+    while root.parent_engagement_id is not None and root.parent_engagement_id not in visited:
+        result = await db.execute(
+            select(Engagement).where(Engagement.id == root.parent_engagement_id)
+        )
+        parent = result.scalar_one_or_none()
+        if parent is None:
+            break
+        visited.add(parent.id)
+        root = parent
+
+    family_ids: set[uuid.UUID] = {root.id}
+    frontier: list[uuid.UUID] = [root.id]
+    while frontier:
+        result = await db.execute(
+            select(Engagement.id).where(Engagement.parent_engagement_id.in_(frontier))
+        )
+        new_ids: list[uuid.UUID] = []
+        for row in result.all():
+            eid = row[0]
+            if eid not in family_ids:
+                family_ids.add(eid)
+                new_ids.append(eid)
+        frontier = new_ids
+
+    fam_result = await db.execute(
+        select(Engagement)
+        .where(Engagement.id.in_(family_ids))
+        .options(selectinload(Engagement.files))
+    )
+    return list(fam_result.scalars().all())
+
+
 @router.get("/{token}/status", response_model=EngagementStatusOut)
-async def get_status(engagement: Engagement = Depends(_get_engagement_for_ir)):
-    ir_docs = [f for f in engagement.files if f.file_type in _IR_FILE_TYPES]
+async def get_status(
+    engagement: Engagement = Depends(_get_engagement_for_ir),
+    db: AsyncSession = Depends(get_db),
+):
+    family = await _walk_family_for_ir(db, engagement)
+    rev_by_id = {m.id: m.revision_number for m in family}
+    ir_docs: list[IRDocumentOut] = []
+    for member in family:
+        for f in member.files:
+            if f.file_type in _IR_FILE_TYPES:
+                payload = IRDocumentOut.model_validate(f)
+                ir_docs.append(payload.model_copy(update={
+                    "engagement_id": f.engagement_id,
+                    "revision_number": rev_by_id.get(f.engagement_id, 0),
+                }))
+    ir_docs.sort(key=lambda d: d.uploaded_at, reverse=True)
     return EngagementStatusOut(
         id=engagement.id,
         doc_number=engagement.doc_number,
@@ -68,7 +122,7 @@ async def get_status(engagement: Engagement = Depends(_get_engagement_for_ir)):
         is_ai_application=engagement.is_ai_application,
         created_at=engagement.created_at,
         updated_at=engagement.updated_at,
-        ir_documents=[IRDocumentOut.model_validate(f) for f in ir_docs],
+        ir_documents=ir_docs,
     )
 
 
@@ -195,6 +249,8 @@ async def delete_file(
     if engagement.status == EngagementStatus.CLOSED:
         raise HTTPException(403, "Document uploads are locked. Contact the Information Security Team to reopen the engagement.")
 
+    # IR can only delete files attached to their own engagement (the revision
+    # tied to their token). Files from prior revisions are immutable.
     result = await db.execute(
         select(FileUpload).where(
             FileUpload.id == file_id,

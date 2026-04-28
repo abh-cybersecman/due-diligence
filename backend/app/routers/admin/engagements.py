@@ -30,6 +30,7 @@ from app.schemas.engagement import (
     IRDocumentOut,
     RefreshEngagementRequest,
     ResponseEntry,
+    RevisionSibling,
     SetStatusRequest,
     VendorAttachmentEntry,
 )
@@ -126,7 +127,40 @@ async def _find_root_and_family(
 
 
 def _latest_in_family(family: list[Engagement]) -> Engagement:
-    return max(family, key=lambda e: e.revision_number)
+    """Return the latest revision in the family, skipping CANCELLED rows.
+
+    If every member is cancelled (degenerate, should not be reachable in
+    practice), fall back to the highest revision_number regardless of status.
+    """
+    non_cancelled = [e for e in family if e.status != EngagementStatus.CANCELLED]
+    pool = non_cancelled or family
+    return max(pool, key=lambda e: e.revision_number)
+
+
+def _next_revision_number(family: list[Engagement]) -> int:
+    """Next refresh slot. Counts every revision (incl. CANCELLED) so a cancelled
+    R1 keeps its slot — the next refresh becomes R2, never reusing R1."""
+    return max(member.revision_number for member in family) + 1
+
+
+async def _family_has_ir_documents(
+    db: AsyncSession, family: list[Engagement]
+) -> tuple[bool, bool]:
+    """Return (has_nda, has_sow) across all members of the family."""
+    family_ids = [e.id for e in family]
+    if not family_ids:
+        return False, False
+    docs_result = await db.execute(
+        select(FileUpload).where(
+            FileUpload.engagement_id.in_(family_ids),
+            FileUpload.file_type.in_([FileType.IR_NDA, FileType.IR_SOW]),
+        )
+    )
+    docs = docs_result.scalars().all()
+    return (
+        any(f.file_type == FileType.IR_NDA for f in docs),
+        any(f.file_type == FileType.IR_SOW for f in docs),
+    )
 
 
 async def _build_revision_meta(
@@ -150,6 +184,7 @@ async def _build_revision_meta(
         "latest_revision_doc_number": None if is_latest else latest.doc_number,
         "root_doc_number": root.doc_number,
         "parent_doc_number": parent_doc_number,
+        "revision_count": len(family),
     }
 
 
@@ -158,6 +193,11 @@ async def _serialize_with_meta(
 ) -> EngagementResponse:
     payload = EngagementResponse.model_validate(engagement)
     meta = await _build_revision_meta(db, engagement)
+    # Attach the family's siblings so the frontend can render revision pickers
+    # in the Responses and Export dropdowns.
+    _, family = await _find_root_and_family(db, engagement)
+    siblings = sorted(family, key=lambda m: m.revision_number)
+    meta["revisions"] = [RevisionSibling.model_validate(m) for m in siblings]
     return payload.model_copy(update=meta)
 
 
@@ -191,33 +231,107 @@ async def _fetch_engagement(db: AsyncSession, engagement_id: uuid.UUID) -> Engag
 async def list_engagements(
     status: EngagementStatus | None = None,
     search: str | None = None,
+    group_by_family: bool = True,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     admin: str = Depends(get_admin_user),
     db: AsyncSession = Depends(get_db),
 ) -> EngagementListResponse:
-    base_q = select(Engagement)
-    count_q = select(func.count(Engagement.id))
+    if not group_by_family:
+        base_q = select(Engagement)
+        count_q = select(func.count(Engagement.id))
+        if status is not None:
+            base_q = base_q.where(Engagement.status == status)
+            count_q = count_q.where(Engagement.status == status)
+        if search:
+            like = f"%{search}%"
+            base_q = base_q.where(Engagement.application_name.ilike(like))
+            count_q = count_q.where(Engagement.application_name.ilike(like))
 
-    if status is not None:
-        base_q = base_q.where(Engagement.status == status)
-        count_q = count_q.where(Engagement.status == status)
-    if search:
-        like = f"%{search}%"
-        base_q = base_q.where(Engagement.application_name.ilike(like))
-        count_q = count_q.where(Engagement.application_name.ilike(like))
+        total = (await db.execute(count_q)).scalar_one()
+        items = (
+            await db.execute(
+                base_q.order_by(Engagement.created_at.desc()).limit(limit).offset(offset)
+            )
+        ).scalars().all()
 
-    total = (await db.execute(count_q)).scalar_one()
-    items = (
-        await db.execute(
-            base_q.order_by(Engagement.created_at.desc()).limit(limit).offset(offset)
+        return EngagementListResponse(
+            items=[EngagementResponse.model_validate(e) for e in items],
+            total=total,
         )
+
+    # Grouped: build the family map across all engagements, then filter by
+    # whether ANY revision matches the search/status.
+    all_rows = (
+        await db.execute(select(Engagement).order_by(Engagement.created_at.desc()))
     ).scalars().all()
 
-    return EngagementListResponse(
-        items=[EngagementResponse.model_validate(e) for e in items],
-        total=total,
-    )
+    # Build root_id → list[Engagement]
+    by_id = {e.id: e for e in all_rows}
+    family_of: dict[uuid.UUID, uuid.UUID] = {}
+
+    def root_id_for(e: Engagement) -> uuid.UUID:
+        seen: set[uuid.UUID] = set()
+        cur = e
+        while cur.parent_engagement_id is not None and cur.parent_engagement_id in by_id:
+            if cur.id in seen:
+                break
+            seen.add(cur.id)
+            cur = by_id[cur.parent_engagement_id]
+        return cur.id
+
+    for e in all_rows:
+        family_of[e.id] = root_id_for(e)
+
+    families: dict[uuid.UUID, list[Engagement]] = {}
+    for e in all_rows:
+        families.setdefault(family_of[e.id], []).append(e)
+
+    # Filter logic: a family appears if any of its revisions matches.
+    like = f"%{search}%".lower() if search else None
+
+    def family_matches(members: list[Engagement]) -> bool:
+        for m in members:
+            if status is not None and m.status != status:
+                continue
+            if like and like.strip("%") not in (m.application_name or "").lower():
+                continue
+            return True
+        return False
+
+    matched_families = [
+        members for members in families.values() if family_matches(members)
+    ]
+
+    # Order families by their latest member's created_at desc.
+    def family_sort_key(members: list[Engagement]):
+        latest = _latest_in_family(members)
+        return latest.created_at
+
+    matched_families.sort(key=family_sort_key, reverse=True)
+
+    total = len(matched_families)
+    page = matched_families[offset:offset + limit]
+
+    # For each family, the row represents the latest non-cancelled revision
+    # and carries `revisions` siblings. We must reload the latest row with
+    # operating_companies eagerly loaded.
+    items: list[EngagementResponse] = []
+    for members in page:
+        latest = _latest_in_family(members)
+        latest_full = await _fetch_engagement(db, latest.id)
+        siblings = sorted(members, key=lambda m: m.revision_number)
+        payload = EngagementResponse.model_validate(latest_full)
+        items.append(
+            payload.model_copy(update={
+                "revision_count": len(members),
+                "revisions": [
+                    RevisionSibling.model_validate(m) for m in siblings
+                ],
+            })
+        )
+
+    return EngagementListResponse(items=items, total=total)
 
 
 @router.post("/engagements", response_model=EngagementResponse, status_code=201)
@@ -358,8 +472,13 @@ async def advance_engagement(
     admin: str = Depends(get_admin_user),
     db: AsyncSession = Depends(get_db),
 ) -> EngagementResponse:
-    """Advance DRAFT → FUNCTIONAL_EVALUATION_PENDING."""
+    """Advance DRAFT → FUNCTIONAL_EVALUATION_PENDING (new engagements only)."""
     engagement = await _get_engagement_or_404(db, engagement_id)
+    if engagement.revision_number > 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Refresh engagements skip functional evaluation",
+        )
     validate_transition(engagement.status, EngagementStatus.FUNCTIONAL_EVALUATION_PENDING)
 
     old_status = engagement.status
@@ -392,23 +511,52 @@ async def dispatch_engagement(
     admin: str = Depends(get_admin_user),
     db: AsyncSession = Depends(get_db),
 ) -> EngagementResponse:
-    """Dispatch vendor questionnaire: PENDING_DISPATCH → DD_IN_PROGRESS."""
+    """Dispatch vendor questionnaire to DD_IN_PROGRESS.
+
+    Source state depends on revision:
+    - New engagements (revision 0): PENDING_DISPATCH → DD_IN_PROGRESS
+    - Refresh engagements (revision > 0): DRAFT → DD_IN_PROGRESS (skip FE/PD)
+    """
     engagement = await _get_engagement_or_404(db, engagement_id)
-    validate_transition(engagement.status, EngagementStatus.DD_IN_PROGRESS)
+    validate_transition(
+        engagement.status,
+        EngagementStatus.DD_IN_PROGRESS,
+        revision_number=engagement.revision_number,
+    )
 
     old_status = engagement.status
     engagement.status = EngagementStatus.DD_IN_PROGRESS
     engagement.updated_at = datetime.now(timezone.utc)
 
+    is_refresh = engagement.revision_number > 0
     await log_action(
         db,
         actor=admin,
         actor_type=ActorType.ADMIN,
         action="engagement.dispatched",
-        description=f"Engagement {engagement.doc_number} dispatched to vendor: {old_status.value} → DD_IN_PROGRESS",
+        description=(
+            f"Engagement {engagement.doc_number} "
+            f"{'re-dispatched' if is_refresh else 'dispatched'} to vendor: "
+            f"{old_status.value} → DD_IN_PROGRESS"
+        ),
         engagement_id=engagement_id,
-        metadata={"from": old_status.value, "to": EngagementStatus.DD_IN_PROGRESS.value},
+        metadata={
+            "from": old_status.value,
+            "to": EngagementStatus.DD_IN_PROGRESS.value,
+            "is_refresh": is_refresh,
+        },
     )
+
+    if is_refresh:
+        # Notify vendor + IR contacts (stub: wired in Phase 3).
+        from app.services.notifications import (
+            send_refresh_dispatch_to_vendor,
+            send_refresh_notice_to_ir,
+        )
+        for email in engagement.vendor_emails or []:
+            await send_refresh_dispatch_to_vendor(str(engagement.id), email)
+        for email in engagement.ir_emails or []:
+            await send_refresh_notice_to_ir(str(engagement.id), email)
 
     await db.flush()
     return EngagementResponse.model_validate(await _fetch_engagement(db, engagement_id))
@@ -598,7 +746,9 @@ async def refresh_engagement(
             ),
         )
 
-    next_rev = max(member.revision_number for member in family) + 1
+    # Cancelled rows keep their slot — the next refresh is MAX(rev) + 1 across
+    # the entire family, never reusing a cancelled revision's number.
+    next_rev = _next_revision_number(family)
     new_doc_number = f"{root.doc_number}-R{next_rev}"
 
     # Pin to the current published version (not the source's version).
@@ -788,15 +938,8 @@ async def close_engagement(
             detail=f"Can only close from UNDER_REVIEW (current: {engagement.status.value})",
         )
 
-    docs_result = await db.execute(
-        select(FileUpload).where(
-            FileUpload.engagement_id == engagement_id,
-            FileUpload.file_type.in_([FileType.IR_NDA, FileType.IR_SOW]),
-        )
-    )
-    ir_docs = docs_result.scalars().all()
-    has_nda = any(f.file_type == FileType.IR_NDA for f in ir_docs)
-    has_sow = any(f.file_type == FileType.IR_SOW for f in ir_docs)
+    _, family = await _find_root_and_family(db, engagement)
+    has_nda, has_sow = await _family_has_ir_documents(db, family)
     target = EngagementStatus.CLOSED if (has_nda and has_sow) else EngagementStatus.PENDING_CLOSURE
 
     old_status = engagement.status
@@ -842,15 +985,11 @@ async def close_from_pending(
             detail="A finalised risk assessment is required before closing the engagement",
         )
 
-    docs_result = await db.execute(
-        select(FileUpload).where(
-            FileUpload.engagement_id == engagement_id,
-            FileUpload.file_type.in_([FileType.IR_NDA, FileType.IR_SOW]),
-        )
-    )
-    ir_docs = docs_result.scalars().all()
-    has_nda = any(f.file_type == FileType.IR_NDA for f in ir_docs)
-    has_sow = any(f.file_type == FileType.IR_SOW for f in ir_docs)
+    # Refresh engagements (revision_number > 0) inherit NDA/SOW coverage from
+    # earlier revisions in the family. Only the original (revision 0) must
+    # carry the documents on its own row.
+    _, family = await _find_root_and_family(db, engagement)
+    has_nda, has_sow = await _family_has_ir_documents(db, family)
     if not (has_nda and has_sow):
         missing = []
         if not has_nda:
@@ -943,13 +1082,28 @@ async def list_files(
     admin: str = Depends(get_admin_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[IRDocumentOut]:
-    await _get_engagement_or_404(db, engagement_id)
+    """Return all files in the engagement family. Each row carries
+    engagement_id and revision_number so the frontend can render a revision
+    badge and gate Delete to the latest revision only."""
+    engagement = await _get_engagement_or_404(db, engagement_id)
+    _, family = await _find_root_and_family(db, engagement)
+    family_ids = [m.id for m in family]
+    rev_by_id = {m.id: m.revision_number for m in family}
+
     result = await db.execute(
         select(FileUpload)
-        .where(FileUpload.engagement_id == engagement_id)
-        .order_by(FileUpload.uploaded_at.asc())
+        .where(FileUpload.engagement_id.in_(family_ids))
+        .order_by(FileUpload.uploaded_at.desc())
     )
-    return [IRDocumentOut.model_validate(f) for f in result.scalars().all()]
+    files = result.scalars().all()
+    out: list[IRDocumentOut] = []
+    for f in files:
+        payload = IRDocumentOut.model_validate(f)
+        out.append(payload.model_copy(update={
+            "engagement_id": f.engagement_id,
+            "revision_number": rev_by_id.get(f.engagement_id, 0),
+        }))
+    return out
 
 
 @router.get("/engagements/{engagement_id}/files/{file_id}")
@@ -959,10 +1113,16 @@ async def download_file(
     admin: str = Depends(get_admin_user),
     db: AsyncSession = Depends(get_db),
 ) -> FileResponse:
+    """Download a file. Authorisation extends to the whole engagement family —
+    a file uploaded against R0 can be downloaded from R1's URL and vice versa."""
+    engagement = await _get_engagement_or_404(db, engagement_id)
+    _, family = await _find_root_and_family(db, engagement)
+    family_ids = [m.id for m in family]
+
     result = await db.execute(
         select(FileUpload).where(
             FileUpload.id == file_id,
-            FileUpload.engagement_id == engagement_id,
+            FileUpload.engagement_id.in_(family_ids),
         )
     )
     record = result.scalar_one_or_none()
@@ -990,19 +1150,33 @@ async def admin_delete_file(
     admin: str = Depends(get_admin_user),
     db: AsyncSession = Depends(get_db),
 ) -> None:
-    """Admin-privileged file deletion — requires password re-confirmation."""
+    """Admin-privileged file deletion — requires password re-confirmation.
+
+    Deletion is gated to files belonging to the latest revision in the
+    engagement family. Files attached to older revisions are immutable.
+    """
     if not verify_password(body.password, settings.admin_password_hash):
         raise HTTPException(status_code=403, detail="Incorrect password")
+
+    engagement = await _get_engagement_or_404(db, engagement_id)
+    _, family = await _find_root_and_family(db, engagement)
+    family_ids = [m.id for m in family]
+    latest = _latest_in_family(family)
 
     result = await db.execute(
         select(FileUpload).where(
             FileUpload.id == file_id,
-            FileUpload.engagement_id == engagement_id,
+            FileUpload.engagement_id.in_(family_ids),
         )
     )
     record = result.scalar_one_or_none()
     if record is None:
         raise HTTPException(status_code=404, detail="File not found")
+    if record.engagement_id != latest.id:
+        raise HTTPException(
+            status_code=403,
+            detail="Cannot delete files from a previous revision",
+        )
 
     stored_path = record.stored_path
     original_name = record.original_filename

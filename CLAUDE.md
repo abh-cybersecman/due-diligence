@@ -675,7 +675,8 @@ Enforce these transitions in the backend. Reject invalid transitions with 400.
 
 ```
 DRAFT
-  → FUNCTIONAL_EVALUATION_PENDING     (admin triggers manually via /advance)
+  → FUNCTIONAL_EVALUATION_PENDING     (admin triggers manually via /advance — new engagements only, revision_number == 0)
+  → DD_IN_PROGRESS                    (refresh engagements only, revision_number > 0 — admin clicks "Dispatch to Vendor")
 
 FUNCTIONAL_EVALUATION_PENDING
   → PENDING_DISPATCH                  (automatic: when functional evaluation file is uploaded by IR)
@@ -692,14 +693,14 @@ RISK_ASSESSMENT_PENDING
   → DD_IN_PROGRESS                    (admin clicks "Reopen Questionnaire")
 
 PENDING_CLOSURE
-  → CLOSED                            (admin manually clicks "Close Engagement" — requires NDA + SOW present)
+  → CLOSED                            (admin manually clicks "Close Engagement" — requires NDA + SOW present in the family)
   → UNDER_REVIEW                      (admin manually triggers)
 
 CLOSED
   → UNDER_REVIEW                      (admin manually triggers)
 
 UNDER_REVIEW
-  → CLOSED or PENDING_CLOSURE         (admin manually closes again — check IR doc status)
+  → CLOSED or PENDING_CLOSURE         (admin manually closes again — check IR doc status across the family)
 
 ANY STATUS (except CANCELLED)
   → CANCELLED                         (admin clicks "Cancel Engagement" — requires password re-confirmation)
@@ -708,10 +709,21 @@ CANCELLED
   → DRAFT                             (admin clicks "Reopen DD" — yes/no confirmation only)
 ```
 
+**Refresh engagements (revision_number > 0)** follow a shorter path that skips
+`FUNCTIONAL_EVALUATION_PENDING` and `PENDING_DISPATCH` entirely:
+`DRAFT → DD_IN_PROGRESS → RISK_ASSESSMENT_PENDING → PENDING_CLOSURE → CLOSED`.
+Admin dispatches directly to the vendor from `DRAFT` via the existing
+`/dispatch` endpoint. No new enum values; only the entry path differs.
+
+**NDA / SOW close validation** for refresh engagements (`revision_number > 0`)
+walks the engagement family rather than checking only the current row. If R0
+in the family has both an NDA and an SOW on file, R1 inherits the legal
+coverage and can close cleanly even if no IR uploads occurred during R1.
+
 Vendor form is editable (autosave, file upload/delete) in: `DD_IN_PROGRESS`, `UNDER_REVIEW`.
 Vendor form submit button is only available in: `DD_IN_PROGRESS`.
 Vendor form is read-only in all other statuses.
-IR can upload and delete documents in any status EXCEPT `CLOSED` — once closed, all IR document changes are locked.
+IR can upload and delete documents in any status EXCEPT `CLOSED` — once closed, all IR document changes are locked. IR uploads during a refresh do not advance the lifecycle.
 Admin can edit structured fields, risk assessment, and internal notes in any status.
 
 ---
