@@ -335,6 +335,7 @@ function OverviewTab({ engagement, apiFetch, onRefresh }) {
         <div style={s.panelBody}>
           <div style={s.infoGrid}>
             <InfoRow label="Document Number" value={<span style={s.mono}>{engagement.doc_number}</span>} />
+            <LastRefreshRow engagement={engagement} />
             <InfoRow label="Application" value={engagement.application_name} />
             {ocEdit ? (
               <div style={s.infoRow}>
@@ -397,6 +398,7 @@ function OverviewTab({ engagement, apiFetch, onRefresh }) {
             <TokenRow label="IR Token" token={engagement.ir_token} urlPath="/evaluation" />
             <InfoRow label="Created" value={formatDate(engagement.created_at)} />
             <InfoRow label="Submitted" value={formatDate(engagement.submitted_at)} />
+            <RevisionsRow engagement={engagement} />
           </div>
           {engagement.internal_notes && (
             <div style={s.notes}>
@@ -467,6 +469,87 @@ function InfoRow({ label, value }) {
     <div style={s.infoRow}>
       <span style={s.infoLabel}>{label}</span>
       <span style={s.infoValue}>{value}</span>
+    </div>
+  )
+}
+
+// "Last refresh" row in the Engagement Details table — only when the family
+// has more than one revision. Date follows the state of the latest non-R0
+// revision: closed_at / cancelled_at when terminal, created_at when still
+// in progress (with " — in progress" appended in the parens).
+function LastRefreshRow({ engagement }) {
+  if ((engagement.revision_count || 1) <= 1) return null
+  const revisions = engagement.revisions || []
+  const afterR0 = revisions.filter(r => r.revision_number > 0)
+  if (afterR0.length === 0) return null
+  const latest = afterR0.reduce((a, b) => (a.revision_number > b.revision_number ? a : b))
+
+  const IN_PROGRESS = new Set([
+    'DRAFT', 'FUNCTIONAL_EVALUATION_PENDING', 'PENDING_DISPATCH',
+    'DD_IN_PROGRESS', 'RISK_ASSESSMENT_PENDING', 'PENDING_CLOSURE', 'UNDER_REVIEW',
+  ])
+  // RevisionSibling carries closed_at / cancelled_at but not created_at. For
+  // in-progress states the latest-after-R0 is always the engagement we're
+  // viewing (the redirect lands on latest non-cancelled), so we can fall
+  // back to engagement.created_at safely.
+  let dateIso
+  let suffix = `R${latest.revision_number}`
+  if (latest.status === 'CANCELLED') {
+    dateIso = latest.cancelled_at
+  } else if (latest.status === 'CLOSED') {
+    dateIso = latest.closed_at
+  } else if (IN_PROGRESS.has(latest.status)) {
+    dateIso = engagement.created_at
+    suffix = `R${latest.revision_number} — in progress`
+  }
+
+  if (!dateIso) return null
+  const value = `${formatDate(dateIso)} (${suffix})`
+  return <InfoRow label="Last refresh" value={value} />
+}
+
+// "Revisions" row — vertical stack of every revision in the family, latest
+// first. Each line reuses revisionStateLabel; cancelled rows are muted;
+// (current) tags the latest non-cancelled, (original) tags R0.
+function RevisionsRow({ engagement }) {
+  if ((engagement.revision_count || 1) <= 1) return null
+  const revisions = engagement.revisions || []
+  if (revisions.length === 0) return null
+  const sorted = [...revisions].sort((a, b) => b.revision_number - a.revision_number)
+  // Latest non-cancelled = (current). Same rule as backend's _latest_in_family.
+  const latestNonCancelled = sorted.find(r => r.status !== 'CANCELLED')
+
+  return (
+    <div style={s.infoRow}>
+      <span style={s.infoLabel}>Revisions</span>
+      <div style={{ ...s.infoValue, display: 'flex', flexDirection: 'column', gap: 4 }}>
+        {sorted.map(rev => {
+          const cancelled = rev.status === 'CANCELLED'
+          const isCurrent = !cancelled && latestNonCancelled && rev.id === latestNonCancelled.id
+          const isOriginal = rev.revision_number === 0
+          const tags = []
+          if (isCurrent) tags.push('current')
+          if (isOriginal) tags.push('original')
+          return (
+            <div
+              key={rev.id}
+              style={{
+                color: cancelled ? 'var(--text-muted)' : 'var(--text-primary)',
+                fontSize: 'var(--text-sm)',
+              }}
+            >
+              <span style={s.mono}>R{rev.revision_number}</span>
+              <span style={{ color: 'var(--text-muted)' }}> — </span>
+              <span>{revisionStateLabel(rev)}</span>
+              {tags.length > 0 && (
+                <span style={{ color: 'var(--text-muted)', marginLeft: 6 }}>
+                  ({tags.join(', ')})
+                </span>
+              )}
+            </div>
+          )
+        })}
+      </div>
     </div>
   )
 }
