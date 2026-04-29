@@ -1,4 +1,5 @@
 import os
+import re
 import uuid
 from datetime import datetime, timezone
 
@@ -126,6 +127,46 @@ async def _find_root_and_family(
     return root, family
 
 
+_REV_SUFFIX_RE = re.compile(r"-R\d+$")
+
+
+def _root_doc_number(doc_number: str) -> str:
+    """Return the doc number with any trailing -R{n} suffix removed."""
+    return _REV_SUFFIX_RE.sub("", doc_number or "")
+
+
+async def _family_size_map(db: AsyncSession) -> dict[uuid.UUID, int]:
+    """Return engagement_id → size of its revision family (incl. self).
+
+    Walks parent_engagement_id across all engagements in one pass; lets the
+    flat-view list endpoint annotate each row with its family size so the
+    frontend can render an R-chip when a row belongs to a multi-revision family.
+    """
+    rows = (await db.execute(select(Engagement.id, Engagement.parent_engagement_id))).all()
+    parent_of: dict[uuid.UUID, uuid.UUID | None] = {r[0]: r[1] for r in rows}
+
+    def root_for(eid: uuid.UUID) -> uuid.UUID:
+        cur = eid
+        seen: set[uuid.UUID] = set()
+        while True:
+            parent = parent_of.get(cur)
+            if parent is None or parent not in parent_of or parent in seen:
+                return cur
+            seen.add(cur)
+            cur = parent
+
+    family_sizes: dict[uuid.UUID, int] = {}
+    root_counts: dict[uuid.UUID, int] = {}
+    roots_by_id: dict[uuid.UUID, uuid.UUID] = {}
+    for eid in parent_of:
+        root = root_for(eid)
+        roots_by_id[eid] = root
+        root_counts[root] = root_counts.get(root, 0) + 1
+    for eid, root in roots_by_id.items():
+        family_sizes[eid] = root_counts[root]
+    return family_sizes
+
+
 def _latest_in_family(family: list[Engagement]) -> Engagement:
     """Return the latest revision in the family, skipping CANCELLED rows.
 
@@ -238,27 +279,34 @@ async def list_engagements(
     db: AsyncSession = Depends(get_db),
 ) -> EngagementListResponse:
     if not group_by_family:
-        base_q = select(Engagement)
-        count_q = select(func.count(Engagement.id))
+        base_q = select(Engagement).options(selectinload(Engagement.operating_companies))
         if status is not None:
             base_q = base_q.where(Engagement.status == status)
-            count_q = count_q.where(Engagement.status == status)
         if search:
             like = f"%{search}%"
             base_q = base_q.where(Engagement.application_name.ilike(like))
-            count_q = count_q.where(Engagement.application_name.ilike(like))
 
-        total = (await db.execute(count_q)).scalar_one()
-        items = (
-            await db.execute(
-                base_q.order_by(Engagement.created_at.desc()).limit(limit).offset(offset)
-            )
-        ).scalars().all()
-
-        return EngagementListResponse(
-            items=[EngagementResponse.model_validate(e) for e in items],
-            total=total,
+        all_matching = (await db.execute(base_q)).scalars().all()
+        # Sort by (root_doc_number, revision_number) descending — biggest DD
+        # number on top; within a family the highest revision sorts first.
+        all_matching = sorted(
+            all_matching,
+            key=lambda e: (_root_doc_number(e.doc_number), e.revision_number),
+            reverse=True,
         )
+        # Family size per engagement (for the R-chip in flat view). Computed
+        # over all engagements, not just filtered, so a row knows whether it
+        # belongs to a multi-revision family even when siblings are filtered out.
+        family_sizes = await _family_size_map(db)
+        total = len(all_matching)
+        page = all_matching[offset:offset + limit]
+        items = []
+        for e in page:
+            payload = EngagementResponse.model_validate(e)
+            items.append(payload.model_copy(update={
+                "revision_count": family_sizes.get(e.id, 1),
+            }))
+        return EngagementListResponse(items=items, total=total)
 
     # Grouped: build the family map across all engagements, then filter by
     # whether ANY revision matches the search/status.
@@ -303,10 +351,11 @@ async def list_engagements(
         members for members in families.values() if family_matches(members)
     ]
 
-    # Order families by their latest member's created_at desc.
+    # Order families by their root doc number, descending. Each family has a
+    # unique root; tiebreaker on revision_number is moot but cheap.
     def family_sort_key(members: list[Engagement]):
-        latest = _latest_in_family(members)
-        return latest.created_at
+        root = next((m for m in members if m.parent_engagement_id is None), members[0])
+        return _root_doc_number(root.doc_number)
 
     matched_families.sort(key=family_sort_key, reverse=True)
 
@@ -320,7 +369,9 @@ async def list_engagements(
     for members in page:
         latest = _latest_in_family(members)
         latest_full = await _fetch_engagement(db, latest.id)
-        siblings = sorted(members, key=lambda m: m.revision_number)
+        # Siblings ordered with highest revision first so the frontend can
+        # render expanded sub-rows in descending order without re-sorting.
+        siblings = sorted(members, key=lambda m: m.revision_number, reverse=True)
         payload = EngagementResponse.model_validate(latest_full)
         items.append(
             payload.model_copy(update={

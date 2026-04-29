@@ -160,6 +160,12 @@
 
 ---
 
+## Phase D1 — COMPLETE ✅
+
+- **Engagements tab polish** — Sidebar entry "Dashboard" renamed to "Engagements" (route unchanged). Engagements list locked to a single sort: doc number descending, parsed as `(root_doc_number, revision_number)` so it stays correct beyond R9. Family-grouped expanded sub-rows now render in descending revision order (biggest revision first). Doc-number cell on the dashboard strips the trailing `-R{n}` suffix via a `stripRevisionSuffix` helper applied at the cell render site only — engagement detail header, Word export, audit log, and stored `doc_number` are unchanged. Caption fix replaces broken concatenation with view-aware copy ("4 engagement families" / "6 engagements"). Backend flat-list path now annotates each row with its family `revision_count` so flat view renders the R-chip when a row belongs to a multi-revision family.
+
+---
+
 ## Phase 3 — Not started
 
 - [ ] Claude API integration for field extraction (`services/extraction.py`)

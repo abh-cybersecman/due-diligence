@@ -31,6 +31,18 @@ const STATUS_COLORS = {
 const ALL_STATUSES = Object.keys(STATUS_LABELS)
 const FLAT_VIEW_KEY = 'isdd_dashboard_flat_view'
 
+// Strip a trailing `-R{n}` suffix from a doc number for display in the
+// engagements table. The R-chip differentiates revisions; the cell shows the
+// root doc number only. Display-only — never apply elsewhere.
+function stripRevisionSuffix(docNumber) {
+  return (docNumber || '').replace(/-R\d+$/, '')
+}
+
+function captionFor(total, flatView) {
+  if (flatView) return total === 1 ? '1 engagement' : `${total} engagements`
+  return total === 1 ? '1 engagement family' : `${total} engagement families`
+}
+
 function StatusBadge({ status }) {
   return (
     <span
@@ -141,7 +153,7 @@ export default function Dashboard() {
         <div style={s.header}>
           <div>
             <h1 style={s.title}>Engagements</h1>
-            <p style={s.subtitle}>{total} total {flatView ? 'engagement' : 'family'}{total !== 1 ? (flatView ? 's' : ' families') : ''}</p>
+            <p style={s.subtitle}>{captionFor(total, flatView)}</p>
           </div>
           <button className="btn btn-primary" onClick={() => navigate('/admin/engagements/new')}>
             + New Engagement
@@ -209,6 +221,7 @@ export default function Dashboard() {
                 {items.map((eng, idx) => {
                   const revCount = eng.revision_count || 1
                   const grouped = !flatView && revCount > 1
+                  const showRevChip = grouped || (flatView && revCount > 1)
                   const isOpen = expanded.has(eng.id)
                   return (
                     <React.Fragment key={eng.id}>
@@ -233,12 +246,12 @@ export default function Dashboard() {
                         </td>
                         <td style={s.td}>
                           <div style={s.docCell}>
-                            <span style={s.docNum}>{eng.doc_number}</span>
+                            <span style={s.docNum}>{stripRevisionSuffix(eng.doc_number)}</span>
                             <div style={s.docBadgeRow}>
                               {eng.is_ai_application && (
                                 <span style={s.aiBadge}>AI</span>
                               )}
-                              {grouped && (
+                              {showRevChip && (
                                 <span style={s.revBadge}>R{eng.revision_number}</span>
                               )}
                             </div>
@@ -258,8 +271,6 @@ export default function Dashboard() {
                       </tr>
                       {grouped && isOpen && (eng.revisions || [])
                         .filter(rev => rev.id !== eng.id)
-                        .slice()
-                        .reverse()
                         .map(rev => {
                           const isCancelled = rev.status === 'CANCELLED'
                           return (
@@ -275,7 +286,7 @@ export default function Dashboard() {
                               <td style={s.td}></td>
                               <td style={{ ...s.td, paddingLeft: 28 }}>
                                 <div style={s.docCell}>
-                                  <span style={{ ...s.docNum, color: 'var(--text-muted)' }}>{rev.doc_number}</span>
+                                  <span style={{ ...s.docNum, color: 'var(--text-muted)' }}>{stripRevisionSuffix(rev.doc_number)}</span>
                                   <div style={s.docBadgeRow}>
                                     <span style={s.revBadge}>R{rev.revision_number}</span>
                                     {isCancelled && <span style={s.cancelledBadge}>cancelled</span>}

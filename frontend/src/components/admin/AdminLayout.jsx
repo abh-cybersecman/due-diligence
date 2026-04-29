@@ -26,7 +26,7 @@ function FileTextIcon({ size = 14 }) {
 }
 
 const NAV = [
-  { to: '/admin/dashboard', label: 'Dashboard' },
+  { to: '/admin/dashboard', label: 'Engagements' },
   { to: '/admin/questionnaire', label: 'Questionnaire', icon: <FileTextIcon /> },
   { to: '/admin/settings', label: 'Settings' },
 ]
