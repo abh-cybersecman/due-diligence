@@ -278,7 +278,7 @@ Default view: **grouped by engagement family**. Each row represents the root eng
 - Document number cell: `ABHIT-IST-DD-1001 · R2` with a small chevron.
 - Clicking the chevron expands to show R1 and R0 as sub-rows beneath, each with their own status and links.
 - Status column of the parent row shows the latest revision's status.
-- A dashboard toggle "Show all revisions as separate rows" defaults off; when on, each revision is a flat row (useful for search/filter).
+- Grouped-by-family is the only view; there is no flat-row toggle.
 - Status filter and search apply across revisions.
 
 ### Engagement Detail page — Refresh button
@@ -399,7 +399,7 @@ This feature is large. Implement in sequence. Each phase must build clean (`dock
 
 ### Phase Q7 — Dashboard revision grouping + Responses tab revision selector
 
-- Dashboard default grouped view with chevron-expand behaviour; flat toggle.
+- Dashboard grouped-by-family view with chevron-expand behaviour (no flat toggle).
 - Responses tab revision dropdown and historical-view banner.
 - Audit log entries for refresh creation already covered; verify metadata is rich enough for traceability.
 

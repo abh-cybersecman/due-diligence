@@ -166,6 +166,12 @@
 
 ---
 
+## Phase D1.5 — COMPLETE ✅
+
+- **Engagements list: drop flat toggle, add sort-direction + filters** — "Show all revisions as separate rows" checkbox removed entirely; grouped-by-family is now the only view. Backend `GET /api/admin/engagements` no longer accepts `group_by_family`; the flat-view branch and per-row `revision_count` enrichment are gone. DOCUMENT # column header is now interactive — clicks toggle ascending/descending (default desc, ▼/▲ caret); sub-row sort within a family stays descending regardless. New ephemeral filter controls: Operating Company single-select (loaded once on mount, alphabetical), date-range with `Created date` / `Submitted date` selector and `From`/`To` native date pickers (`From > To` rejected with 422 server-side and surfaced as inline hint), and a Clear filters action visible only when at least one filter is active. Empty state inside the table body shows a centred "No engagements match the current filters." message with a Clear filters affordance, table headers stay visible. New backend query params: `sort_direction` (asc/desc), `oc_id` (UUID, validated against the OC list), `date_field` (created/submitted), `date_from`/`date_to` (YYYY-MM-DD UTC bounds). All four filters AND together; OC and date filters match against the family's latest non-cancelled revision. None of the filter or sort state is persisted across sessions.
+
+---
+
 ## Phase 3 — Not started
 
 - [ ] Claude API integration for field extraction (`services/extraction.py`)

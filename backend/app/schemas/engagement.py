@@ -183,7 +183,7 @@ class EngagementResponse(BaseModel):
     root_doc_number: Optional[str] = None
     parent_doc_number: Optional[str] = None
     revision_count: Optional[int] = None
-    # Sibling revisions in the family — populated only when group_by_family is on.
+    # Sibling revisions in the family — populated by the grouped list endpoint.
     revisions: Optional[list["RevisionSibling"]] = None
 
 

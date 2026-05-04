@@ -1,7 +1,8 @@
 import os
 import re
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timezone
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -272,49 +273,50 @@ async def _fetch_engagement(db: AsyncSession, engagement_id: uuid.UUID) -> Engag
 async def list_engagements(
     status: EngagementStatus | None = None,
     search: str | None = None,
-    group_by_family: bool = True,
+    sort_direction: Literal["asc", "desc"] = "desc",
+    oc_id: Optional[uuid.UUID] = None,
+    date_field: Literal["created", "submitted"] = "created",
+    date_from: Optional[date] = None,
+    date_to: Optional[date] = None,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     admin: str = Depends(get_admin_user),
     db: AsyncSession = Depends(get_db),
 ) -> EngagementListResponse:
-    if not group_by_family:
-        base_q = select(Engagement).options(selectinload(Engagement.operating_companies))
-        if status is not None:
-            base_q = base_q.where(Engagement.status == status)
-        if search:
-            like = f"%{search}%"
-            base_q = base_q.where(Engagement.application_name.ilike(like))
-
-        all_matching = (await db.execute(base_q)).scalars().all()
-        # Sort by (root_doc_number, revision_number) descending — biggest DD
-        # number on top; within a family the highest revision sorts first.
-        all_matching = sorted(
-            all_matching,
-            key=lambda e: (_root_doc_number(e.doc_number), e.revision_number),
-            reverse=True,
+    if date_from is not None and date_to is not None and date_from > date_to:
+        raise HTTPException(
+            status_code=422,
+            detail="date_from must not be later than date_to",
         )
-        # Family size per engagement (for the R-chip in flat view). Computed
-        # over all engagements, not just filtered, so a row knows whether it
-        # belongs to a multi-revision family even when siblings are filtered out.
-        family_sizes = await _family_size_map(db)
-        total = len(all_matching)
-        page = all_matching[offset:offset + limit]
-        items = []
-        for e in page:
-            payload = EngagementResponse.model_validate(e)
-            items.append(payload.model_copy(update={
-                "revision_count": family_sizes.get(e.id, 1),
-            }))
-        return EngagementListResponse(items=items, total=total)
 
-    # Grouped: build the family map across all engagements, then filter by
-    # whether ANY revision matches the search/status.
+    if oc_id is not None:
+        oc_exists = (
+            await db.execute(select(OperatingCompany.id).where(OperatingCompany.id == oc_id))
+        ).scalar_one_or_none()
+        if oc_exists is None:
+            raise HTTPException(
+                status_code=422,
+                detail="oc_id does not match any operating company",
+            )
+
+    date_from_dt = (
+        datetime.combine(date_from, time.min, tzinfo=timezone.utc) if date_from else None
+    )
+    date_to_dt = (
+        datetime.combine(date_to, time.max, tzinfo=timezone.utc) if date_to else None
+    )
+
+    # Always grouped-by-family. Build the family map across all engagements,
+    # then filter. Operating companies are eager-loaded so OC filter checks
+    # don't fan out into per-row queries.
     all_rows = (
-        await db.execute(select(Engagement).order_by(Engagement.created_at.desc()))
+        await db.execute(
+            select(Engagement)
+            .options(selectinload(Engagement.operating_companies))
+            .order_by(Engagement.created_at.desc())
+        )
     ).scalars().all()
 
-    # Build root_id → list[Engagement]
     by_id = {e.id: e for e in all_rows}
     family_of: dict[uuid.UUID, uuid.UUID] = {}
 
@@ -335,10 +337,29 @@ async def list_engagements(
     for e in all_rows:
         families.setdefault(family_of[e.id], []).append(e)
 
-    # Filter logic: a family appears if any of its revisions matches.
     like = f"%{search}%".lower() if search else None
 
     def family_matches(members: list[Engagement]) -> bool:
+        latest = _latest_in_family(members)
+
+        # OC filter applies to the latest non-cancelled revision only.
+        if oc_id is not None:
+            latest_oc_ids = {oc.id for oc in (latest.operating_companies or [])}
+            if oc_id not in latest_oc_ids:
+                return False
+
+        # Date filter applies to the latest non-cancelled revision only.
+        # Submitted-date filtering excludes families whose latest is unsubmitted.
+        if date_from_dt is not None or date_to_dt is not None:
+            target = latest.created_at if date_field == "created" else latest.submitted_at
+            if target is None:
+                return False
+            if date_from_dt is not None and target < date_from_dt:
+                return False
+            if date_to_dt is not None and target > date_to_dt:
+                return False
+
+        # Status/search match against any revision in the family.
         for m in members:
             if status is not None and m.status != status:
                 continue
@@ -351,26 +372,21 @@ async def list_engagements(
         members for members in families.values() if family_matches(members)
     ]
 
-    # Order families by their root doc number, descending. Each family has a
-    # unique root; tiebreaker on revision_number is moot but cheap.
     def family_sort_key(members: list[Engagement]):
         root = next((m for m in members if m.parent_engagement_id is None), members[0])
         return _root_doc_number(root.doc_number)
 
-    matched_families.sort(key=family_sort_key, reverse=True)
+    matched_families.sort(key=family_sort_key, reverse=(sort_direction == "desc"))
 
     total = len(matched_families)
     page = matched_families[offset:offset + limit]
 
-    # For each family, the row represents the latest non-cancelled revision
-    # and carries `revisions` siblings. We must reload the latest row with
-    # operating_companies eagerly loaded.
     items: list[EngagementResponse] = []
     for members in page:
         latest = _latest_in_family(members)
         latest_full = await _fetch_engagement(db, latest.id)
-        # Siblings ordered with highest revision first so the frontend can
-        # render expanded sub-rows in descending order without re-sorting.
+        # Sub-rows always render highest-revision first regardless of the
+        # family-level direction toggle.
         siblings = sorted(members, key=lambda m: m.revision_number, reverse=True)
         payload = EngagementResponse.model_validate(latest_full)
         items.append(

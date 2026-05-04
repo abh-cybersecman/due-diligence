@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import AdminLayout from '../../components/admin/AdminLayout'
 import { useAuth } from '../../contexts/AuthContext'
@@ -29,7 +29,6 @@ const STATUS_COLORS = {
 }
 
 const ALL_STATUSES = Object.keys(STATUS_LABELS)
-const FLAT_VIEW_KEY = 'isdd_dashboard_flat_view'
 
 // Strip a trailing `-R{n}` suffix from a doc number for display in the
 // engagements table. The R-chip differentiates revisions; the cell shows the
@@ -38,8 +37,7 @@ function stripRevisionSuffix(docNumber) {
   return (docNumber || '').replace(/-R\d+$/, '')
 }
 
-function captionFor(total, flatView) {
-  if (flatView) return total === 1 ? '1 engagement' : `${total} engagements`
+function captionFor(total) {
   return total === 1 ? '1 engagement family' : `${total} engagement families`
 }
 
@@ -74,8 +72,15 @@ export default function Dashboard() {
   const [search, setSearch] = useState('')
   const [searchInput, setSearchInput] = useState('')
   const [offset, setOffset] = useState(0)
-  const [flatView, setFlatView] = useState(() => localStorage.getItem(FLAT_VIEW_KEY) === '1')
   const [expanded, setExpanded] = useState(() => new Set())
+
+  const [sortDirection, setSortDirection] = useState('desc')
+  const [ocs, setOcs] = useState([])
+  const [ocFilter, setOcFilter] = useState('')
+  const [dateField, setDateField] = useState('created')
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
+
   const LIMIT = 50
 
   const apiFetch = useCallback(
@@ -91,12 +96,43 @@ export default function Dashboard() {
     [adminSession]
   )
 
+  // Load OC list once on mount; the dropdown is otherwise stable across filter
+  // changes (a new OC added in Settings shows up after a hard reload).
+  useEffect(() => {
+    apiFetch('/api/admin/settings/oc-list')
+      .then(r => (r.ok ? r.json() : []))
+      .then(list => {
+        const sorted = [...(list || [])].sort((a, b) =>
+          (a.name || '').localeCompare(b.name || '')
+        )
+        setOcs(sorted)
+      })
+      .catch(() => {})
+  }, [apiFetch])
+
+  const dateRangeInvalid = useMemo(() => {
+    if (!dateFrom || !dateTo) return false
+    return dateFrom > dateTo
+  }, [dateFrom, dateTo])
+
   const loadEngagements = useCallback(async () => {
+    if (dateRangeInvalid) {
+      setItems([])
+      setTotal(0)
+      setLoading(false)
+      return
+    }
     setLoading(true)
     const params = new URLSearchParams()
     if (statusFilter) params.set('status', statusFilter)
     if (search) params.set('search', search)
-    params.set('group_by_family', flatView ? 'false' : 'true')
+    params.set('sort_direction', sortDirection)
+    if (ocFilter) params.set('oc_id', ocFilter)
+    if (dateFrom || dateTo) {
+      params.set('date_field', dateField)
+      if (dateFrom) params.set('date_from', dateFrom)
+      if (dateTo) params.set('date_to', dateTo)
+    }
     params.set('limit', LIMIT)
     params.set('offset', offset)
 
@@ -106,22 +142,21 @@ export default function Dashboard() {
         const data = await res.json()
         setItems(data.items)
         setTotal(data.total)
+      } else {
+        setItems([])
+        setTotal(0)
       }
-    } catch {}
+    } catch {
+      setItems([])
+      setTotal(0)
+    }
     setLoading(false)
-  }, [apiFetch, statusFilter, search, offset, flatView])
+  }, [
+    apiFetch, statusFilter, search, offset, sortDirection,
+    ocFilter, dateField, dateFrom, dateTo, dateRangeInvalid,
+  ])
 
   useEffect(() => { loadEngagements() }, [loadEngagements])
-
-  function toggleFlatView() {
-    setFlatView(v => {
-      const next = !v
-      localStorage.setItem(FLAT_VIEW_KEY, next ? '1' : '0')
-      setOffset(0)
-      setExpanded(new Set())
-      return next
-    })
-  }
 
   function toggleExpand(famId) {
     setExpanded(prev => {
@@ -143,6 +178,26 @@ export default function Dashboard() {
     setOffset(0)
   }
 
+  function toggleSortDirection() {
+    setSortDirection(d => (d === 'desc' ? 'asc' : 'desc'))
+    setOffset(0)
+  }
+
+  function clearFilters() {
+    setSearchInput('')
+    setSearch('')
+    setStatusFilter('')
+    setOcFilter('')
+    setDateField('created')
+    setDateFrom('')
+    setDateTo('')
+    setOffset(0)
+  }
+
+  const filtersActive =
+    !!search || !!searchInput || !!statusFilter || !!ocFilter ||
+    !!dateFrom || !!dateTo
+
   const pages = Math.ceil(total / LIMIT)
   const page = Math.floor(offset / LIMIT)
 
@@ -153,7 +208,7 @@ export default function Dashboard() {
         <div style={s.header}>
           <div>
             <h1 style={s.title}>Engagements</h1>
-            <p style={s.subtitle}>{captionFor(total, flatView)}</p>
+            <p style={s.subtitle}>{captionFor(total)}</p>
           </div>
           <button className="btn btn-primary" onClick={() => navigate('/admin/engagements/new')}>
             + New Engagement
@@ -165,17 +220,12 @@ export default function Dashboard() {
           <form onSubmit={handleSearch} style={s.searchForm}>
             <input
               className="input"
-              style={{ width: 240 }}
+              style={{ width: 220 }}
               placeholder="Search by application name…"
               value={searchInput}
               onChange={e => setSearchInput(e.target.value)}
             />
             <button type="submit" className="btn btn-secondary">Search</button>
-            {search && (
-              <button type="button" className="btn btn-ghost" onClick={() => { setSearch(''); setSearchInput(''); setOffset(0) }}>
-                Clear
-              </button>
-            )}
           </form>
 
           <select
@@ -190,38 +240,115 @@ export default function Dashboard() {
             ))}
           </select>
 
-          <label style={s.flatToggle}>
-            <input type="checkbox" checked={flatView} onChange={toggleFlatView} />
-            Show all revisions as separate rows
-          </label>
+          <select
+            className="input"
+            style={{ width: 160 }}
+            value={ocFilter}
+            onChange={e => { setOcFilter(e.target.value); setOffset(0) }}
+          >
+            <option value="">All OCs</option>
+            {ocs.map(oc => (
+              <option key={oc.id} value={oc.id}>{oc.name}</option>
+            ))}
+          </select>
+
+          <div style={s.dateGroup}>
+            <select
+              className="input"
+              style={{ width: 150 }}
+              value={dateField}
+              onChange={e => { setDateField(e.target.value); setOffset(0) }}
+            >
+              <option value="created">Created date</option>
+              <option value="submitted">Submitted date</option>
+            </select>
+            <label style={s.dateLabel}>From</label>
+            <input
+              type="date"
+              className="input"
+              style={{ width: 150 }}
+              value={dateFrom}
+              onChange={e => { setDateFrom(e.target.value); setOffset(0) }}
+            />
+            <label style={s.dateLabel}>To</label>
+            <input
+              type="date"
+              className="input"
+              style={{ width: 150 }}
+              value={dateTo}
+              onChange={e => { setDateTo(e.target.value); setOffset(0) }}
+            />
+          </div>
+
+          {filtersActive && (
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={clearFilters}
+            >
+              Clear filters
+            </button>
+          )}
         </div>
+
+        {dateRangeInvalid && (
+          <div style={s.validationHint}>
+            “From” date must be on or before the “To” date.
+          </div>
+        )}
 
         {/* Table */}
         <div className="card" style={{ overflow: 'hidden' }}>
-          {loading ? (
-            <div style={s.empty}>Loading…</div>
-          ) : items.length === 0 ? (
-            <div style={s.empty}>
-              {search || statusFilter ? 'No engagements match your filters.' : 'No engagements yet. Create one to get started.'}
-            </div>
-          ) : (
-            <table style={s.table}>
-              <thead>
-                <tr style={s.thead}>
-                  <th style={{ ...s.th, width: 32 }}></th>
-                  <th style={{ ...s.th, width: 180 }}>Document #</th>
-                  <th style={s.th}>Application</th>
-                  <th style={s.th}>Operating Companies</th>
-                  <th style={{ ...s.th, width: 190 }}>Status</th>
-                  <th style={{ ...s.th, width: 110 }}>Created</th>
-                  <th style={{ ...s.th, width: 110 }}>Submitted</th>
+          <table style={s.table}>
+            <thead>
+              <tr style={s.thead}>
+                <th style={{ ...s.th, width: 32 }}></th>
+                <th
+                  style={{ ...s.th, width: 180, ...s.thSortable }}
+                  onClick={toggleSortDirection}
+                  title="Toggle sort direction"
+                >
+                  <span style={s.thSortableInner}>
+                    Document #
+                    <span style={s.sortCaret}>{sortDirection === 'desc' ? '▼' : '▲'}</span>
+                  </span>
+                </th>
+                <th style={s.th}>Application</th>
+                <th style={s.th}>Operating Companies</th>
+                <th style={{ ...s.th, width: 190 }}>Status</th>
+                <th style={{ ...s.th, width: 110 }}>Created</th>
+                <th style={{ ...s.th, width: 110 }}>Submitted</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading ? (
+                <tr>
+                  <td colSpan={7} style={s.empty}>Loading…</td>
                 </tr>
-              </thead>
-              <tbody>
-                {items.map((eng, idx) => {
+              ) : items.length === 0 ? (
+                <tr>
+                  <td colSpan={7} style={s.empty}>
+                    {filtersActive ? (
+                      <>
+                        <div>No engagements match the current filters.</div>
+                        <button
+                          type="button"
+                          className="btn btn-ghost"
+                          style={{ marginTop: 8 }}
+                          onClick={clearFilters}
+                        >
+                          Clear filters
+                        </button>
+                      </>
+                    ) : (
+                      'No engagements yet. Create one to get started.'
+                    )}
+                  </td>
+                </tr>
+              ) : (
+                items.map((eng, idx) => {
                   const revCount = eng.revision_count || 1
-                  const grouped = !flatView && revCount > 1
-                  const showRevChip = grouped || (flatView && revCount > 1)
+                  const grouped = revCount > 1
                   const isOpen = expanded.has(eng.id)
                   return (
                     <React.Fragment key={eng.id}>
@@ -251,7 +378,7 @@ export default function Dashboard() {
                               {eng.is_ai_application && (
                                 <span style={s.aiBadge}>AI</span>
                               )}
-                              {showRevChip && (
+                              {grouped && (
                                 <span style={s.revBadge}>R{eng.revision_number}</span>
                               )}
                             </div>
@@ -303,10 +430,10 @@ export default function Dashboard() {
                         })}
                     </React.Fragment>
                   )
-                })}
-              </tbody>
-            </table>
-          )}
+                })
+              )}
+            </tbody>
+          </table>
         </div>
 
         {/* Pagination */}
@@ -347,19 +474,29 @@ const s = {
   filters: {
     display: 'flex',
     gap: 10,
+    rowGap: 10,
     alignItems: 'center',
     marginBottom: 14,
     flexWrap: 'wrap',
   },
   searchForm: { display: 'flex', gap: 8 },
-  flatToggle: {
+  dateGroup: {
     display: 'flex',
-    alignItems: 'center',
     gap: 6,
+    alignItems: 'center',
+    flexWrap: 'wrap',
+  },
+  dateLabel: {
     fontSize: 'var(--text-xs)',
-    color: 'var(--text-secondary)',
-    cursor: 'pointer',
-    marginLeft: 'auto',
+    color: 'var(--text-muted)',
+    textTransform: 'uppercase',
+    letterSpacing: '0.04em',
+  },
+  validationHint: {
+    fontSize: 'var(--text-xs)',
+    color: 'var(--risk-high)',
+    marginTop: -6,
+    marginBottom: 10,
   },
 
   table: { width: '100%', borderCollapse: 'collapse' },
@@ -374,6 +511,20 @@ const s = {
     letterSpacing: '0.04em',
     borderBottom: '1px solid var(--border)',
     whiteSpace: 'nowrap',
+  },
+  thSortable: {
+    cursor: 'pointer',
+    userSelect: 'none',
+    transition: 'background-color 120ms ease',
+  },
+  thSortableInner: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 6,
+  },
+  sortCaret: {
+    fontSize: 10,
+    color: 'var(--text-muted)',
   },
   tr: {
     cursor: 'pointer',
