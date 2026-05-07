@@ -172,6 +172,12 @@
 
 ---
 
+## Phase D2 — COMPLETE ✅
+
+- **Inventory Dashboard** — new top-level admin view at `/admin/dashboard` showing one row per engagement family with structured-fields columns (service type, hosting, hyperscaler, DR, DR location, data residency, encryption at rest/in transit, MFA). Backed by `GET /api/admin/dashboard/inventory` which uses the latest non-cancelled revision per family, excludes fully-cancelled families, and sorts by parsed root doc number descending. Read-only, no filters/search/sort controls in v1. The DOCUMENT # column is sticky-left and is the only click-through target. Null fields render as em-dashes; AI and R{n} chips reuse the engagements-list styling. Sidebar gains a "Dashboard" entry; the existing Engagements list moves from `/admin/dashboard` to `/admin/engagements`. Default post-login landing changes to `/admin/engagements`; bare `/admin` redirects there. No schema changes, no migrations.
+
+---
+
 ## Phase 3 — Not started
 
 - [ ] Claude API integration for field extraction (`services/extraction.py`)

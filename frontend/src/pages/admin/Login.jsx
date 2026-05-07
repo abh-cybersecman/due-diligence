@@ -27,7 +27,7 @@ export default function AdminLogin() {
       }
       const data = await res.json()
       loginAdmin({ accessToken: data.access_token })
-      navigate('/admin/dashboard', { replace: true })
+      navigate('/admin/engagements', { replace: true })
     } catch {
       setError('Unable to reach the server. Please try again.')
     } finally {

@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.routers.admin.audit import router as admin_audit_router
 from app.routers.admin.auth import router as admin_auth_router
+from app.routers.admin.dashboard import router as admin_dashboard_router
 from app.routers.admin.engagements import router as admin_engagements_router
 from app.routers.admin.questionnaire import router as admin_questionnaire_router
 from app.routers.admin.risk_assessment import router as admin_risk_assessment_router
@@ -35,6 +36,7 @@ app.add_middleware(
 
 
 app.include_router(admin_auth_router, prefix="/api/admin")
+app.include_router(admin_dashboard_router, prefix="/api/admin")
 app.include_router(admin_engagements_router, prefix="/api/admin")
 app.include_router(admin_risk_assessment_router, prefix="/api/admin")
 app.include_router(admin_structured_fields_router, prefix="/api/admin")

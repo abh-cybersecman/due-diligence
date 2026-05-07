@@ -5,6 +5,7 @@ import EvaluationPortal from './pages/evaluation/EvaluationPortal'
 import VendorLogin from './pages/vendor/VendorLogin'
 import AdminLogin from './pages/admin/Login'
 import Dashboard from './pages/admin/Dashboard'
+import InventoryDashboard from './pages/admin/InventoryDashboard'
 import NewEngagement from './pages/admin/NewEngagement'
 import EngagementDetail from './pages/admin/EngagementDetail'
 import Settings from './pages/admin/Settings'
@@ -34,8 +35,10 @@ export default function App() {
           <Route path="/" element={<Navigate to="/admin/login" replace />} />
 
           {/* Admin */}
+          <Route path="/admin" element={<Navigate to="/admin/engagements" replace />} />
           <Route path="/admin/login" element={<AdminLogin />} />
-          <Route path="/admin/dashboard" element={<ProtectedAdmin><Dashboard /></ProtectedAdmin>} />
+          <Route path="/admin/dashboard" element={<ProtectedAdmin><InventoryDashboard /></ProtectedAdmin>} />
+          <Route path="/admin/engagements" element={<ProtectedAdmin><Dashboard /></ProtectedAdmin>} />
           <Route path="/admin/engagements/new" element={<ProtectedAdmin><NewEngagement /></ProtectedAdmin>} />
           <Route path="/admin/engagements/:id" element={<ProtectedAdmin><EngagementDetail /></ProtectedAdmin>} />
           <Route path="/admin/settings" element={<ProtectedAdmin><Settings /></ProtectedAdmin>} />

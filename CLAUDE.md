@@ -553,6 +553,7 @@ All routes prefixed with `APP_BASE_PATH`. Group by access tier.
 /api/admin/
   POST   /auth/login
   POST   /auth/logout
+  GET    /dashboard/inventory               # Inventory view: one row per family, structured fields columns
   GET    /engagements
   POST   /engagements
   GET    /engagements/{id}
@@ -846,7 +847,8 @@ The download endpoint streams the `.tar.gz` file with appropriate headers. Rate-
 
 ```
 /due-diligence/admin/login
-/due-diligence/admin/dashboard
+/due-diligence/admin/dashboard          # Inventory view (one row per family, structured fields)
+/due-diligence/admin/engagements        # Engagements list (grouped-by-family)
 /due-diligence/admin/engagements/new
 /due-diligence/admin/engagements/:id
 /due-diligence/admin/settings

@@ -116,7 +116,7 @@ export default function NewEngagement() {
     <AdminLayout>
       <div className="fade-in" style={{ maxWidth: 640 }}>
         <div style={s.pageHeader}>
-          <button className="btn btn-ghost" style={{ marginBottom: 8, color: 'var(--text-muted)' }} onClick={() => navigate('/admin/dashboard')}>
+          <button className="btn btn-ghost" style={{ marginBottom: 8, color: 'var(--text-muted)' }} onClick={() => navigate('/admin/engagements')}>
             ← Back
           </button>
           <h1 style={s.pageTitle}>New Engagement</h1>
@@ -198,7 +198,7 @@ export default function NewEngagement() {
           {error && <div style={s.error}>{error}</div>}
 
           <div style={s.actions}>
-            <button type="button" className="btn btn-secondary" onClick={() => navigate('/admin/dashboard')}>
+            <button type="button" className="btn btn-secondary" onClick={() => navigate('/admin/engagements')}>
               Cancel
             </button>
             <button type="submit" className="btn btn-primary" disabled={saving}>

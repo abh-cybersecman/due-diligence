@@ -1757,7 +1757,7 @@ export default function EngagementDetail() {
     <AdminLayout>
       <div className="fade-in">
         {/* Breadcrumb */}
-        <button className="btn btn-ghost" style={{ marginBottom: 12, color: 'var(--text-muted)', padding: 0 }} onClick={() => navigate('/admin/dashboard')}>
+        <button className="btn btn-ghost" style={{ marginBottom: 12, color: 'var(--text-muted)', padding: 0 }} onClick={() => navigate('/admin/engagements')}>
           ← Engagements
         </button>
 
