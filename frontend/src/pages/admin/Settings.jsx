@@ -357,7 +357,7 @@ export default function Settings() {
 
   return (
     <AdminLayout>
-      <div className="fade-in">
+      <div className="fade-in" style={{ maxWidth: 880 }}>
         <div style={s.pageHeader}>
           <h1 style={s.pageTitle}>Settings</h1>
           <p style={s.pageDesc}>Manage operating companies and assignees used across engagements.</p>

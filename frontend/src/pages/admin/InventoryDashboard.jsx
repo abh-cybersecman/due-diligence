@@ -148,8 +148,8 @@ export default function InventoryDashboard() {
                 <th style={s.th}>DR</th>
                 <th style={s.th}>DR Location</th>
                 <th style={s.th}>Data Residency</th>
-                <th style={s.th}>Encryption at Rest</th>
-                <th style={s.th}>Encryption in Transit</th>
+                <th style={s.th}>Enc. at Rest</th>
+                <th style={s.th}>Enc. in Transit</th>
                 <th style={s.th}>MFA</th>
               </tr>
             </thead>
@@ -299,7 +299,7 @@ const s = {
   },
   thead: { background: 'var(--bg-subtle)' },
   th: {
-    padding: '9px 16px',
+    padding: '9px 10px',
     textAlign: 'left',
     fontSize: 'var(--text-xs)',
     fontWeight: 500,
@@ -317,7 +317,7 @@ const s = {
     transition: 'background-color 120ms ease',
   },
   td: {
-    padding: '11px 16px',
+    padding: '11px 10px',
     fontSize: 'var(--text-sm)',
     color: 'var(--text-primary)',
     borderBottom: '1px solid var(--border)',

@@ -159,7 +159,7 @@ Use **[Geist](https://vercel.com/font)** (free, `npm install geist`) — a clean
 
 ### Layout
 
-**Admin dashboard**: fixed left sidebar (220px) + scrollable main content area.
+**Admin dashboard**: fixed left sidebar (220px) + scrollable main content area. The content area is capped at `max-width: 1600px` so wide tables (engagements list, inventory) can breathe on large monitors while text-heavy pages don't sprawl on ultrawide displays. On viewports narrower than the cap, the content area shrinks naturally with the viewport. Individual pages may set tighter page-level caps where forms or narrow content would otherwise stretch awkwardly (e.g. NewEngagement is capped at 640px, Settings at 880px).
 
 **Vendor and IR portals**: centered single-column layout (max-width 760px) with a top header bar showing application name and current engagement status.
 

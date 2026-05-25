@@ -285,6 +285,6 @@ const s = {
   },
   content: {
     padding: '28px 32px',
-    maxWidth: 1200,
+    maxWidth: 1600,
   },
 }

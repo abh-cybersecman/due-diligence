@@ -184,6 +184,13 @@
 
 ---
 
+## Phase D2.1b — COMPLETE ✅
+
+- **Wider admin content cap** — raised the `AdminLayout` content wrapper `max-width` from 1200px to 1600px so wide tables (engagements list, inventory dashboard with all 13 columns, three-column questionnaire editor) can breathe on large monitors. Login (separate full-screen layout), NewEngagement (640px) and VendorQuestionnaire/EvaluationPortal (760px) already had page-level caps; Settings opts in to a new 880px page-level cap so its form-style sections don't sprawl. CLAUDE.md Layout section updated to document the new cap and the page-level opt-in pattern.
+- **Inventory dashboard fit** — trimmed `th`/`td` horizontal padding from 16px to 10px and shortened the two longest headers ("Encryption at Rest"/"Encryption in Transit" → "Enc. at Rest"/"Enc. in Transit") so the natural table width drops from ~1700px to 1534px. All 13 columns now fit at 1920px viewport without a horizontal scrollbar.
+
+---
+
 ## Phase 3 — Not started
 
 - [ ] Claude API integration for field extraction (`services/extraction.py`)
