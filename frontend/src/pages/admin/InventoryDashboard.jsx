@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import AdminLayout from '../../components/admin/AdminLayout'
 import { useAuth } from '../../contexts/AuthContext'
 import { BASE_PATH } from '../../config'
+import { DEFAULT_PAGE_SIZE } from '../../constants/pagination'
 
 const STATUS_LABELS = {
   DRAFT: 'Draft',
@@ -79,7 +80,7 @@ export default function InventoryDashboard() {
   const [error, setError] = useState('')
   const [page, setPage] = useState(1)
 
-  const PAGE_SIZE = 50
+  const PAGE_SIZE = DEFAULT_PAGE_SIZE
 
   const apiFetch = useCallback(
     (path, opts = {}) =>
@@ -137,19 +138,19 @@ export default function InventoryDashboard() {
           <table style={s.table}>
             <thead>
               <tr style={s.thead}>
-                <th style={{ ...s.th, ...s.thStickyLeft, minWidth: 170 }}>Document #</th>
-                <th style={{ ...s.th, minWidth: 180 }}>Application</th>
-                <th style={{ ...s.th, minWidth: 200 }}>Operating Companies</th>
-                <th style={{ ...s.th, minWidth: 180 }}>Status</th>
-                <th style={{ ...s.th, minWidth: 130 }}>Service Type</th>
-                <th style={{ ...s.th, minWidth: 130 }}>Hosting</th>
-                <th style={{ ...s.th, minWidth: 130 }}>Hyperscaler</th>
-                <th style={{ ...s.th, minWidth: 90 }}>DR</th>
-                <th style={{ ...s.th, minWidth: 140 }}>DR Location</th>
-                <th style={{ ...s.th, minWidth: 140 }}>Data Residency</th>
-                <th style={{ ...s.th, minWidth: 160 }}>Encryption at Rest</th>
-                <th style={{ ...s.th, minWidth: 170 }}>Encryption in Transit</th>
-                <th style={{ ...s.th, minWidth: 90 }}>MFA</th>
+                <th style={s.th}>Document #</th>
+                <th style={s.th}>Application</th>
+                <th style={s.th}>Operating Companies</th>
+                <th style={s.th}>Status</th>
+                <th style={s.th}>Service Type</th>
+                <th style={s.th}>Hosting</th>
+                <th style={s.th}>Hyperscaler</th>
+                <th style={s.th}>DR</th>
+                <th style={s.th}>DR Location</th>
+                <th style={s.th}>Data Residency</th>
+                <th style={s.th}>Encryption at Rest</th>
+                <th style={s.th}>Encryption in Transit</th>
+                <th style={s.th}>MFA</th>
               </tr>
             </thead>
             <tbody>
@@ -173,18 +174,20 @@ export default function InventoryDashboard() {
                 </tr>
               ) : (
                 items.map((row, idx) => {
-                  const rowBg = idx % 2 === 0 ? 'var(--bg-surface)' : 'var(--bg-subtle)'
                   const sf = row.structured_fields || {}
                   const ocText = (row.operating_companies || []).join(', ')
+                  const isCancelled = row.status === 'CANCELLED'
+                  const mutedStyle = isCancelled ? { color: 'var(--text-muted)' } : undefined
                   return (
-                    <tr key={row.engagement_id} style={s.tr} className="inventory-row">
-                      <td
-                        style={{
-                          ...s.td,
-                          ...s.tdStickyLeft,
-                          background: rowBg,
-                        }}
-                      >
+                    <tr
+                      key={row.engagement_id}
+                      style={{
+                        ...s.tr,
+                        background: idx % 2 === 0 ? 'var(--bg-surface)' : 'var(--bg-subtle)',
+                      }}
+                      className="inventory-row"
+                    >
+                      <td style={s.td}>
                         <div style={s.docCell}>
                           <a
                             href={`#`}
@@ -192,7 +195,10 @@ export default function InventoryDashboard() {
                               e.preventDefault()
                               navigate(`/admin/engagements/${row.engagement_id}`)
                             }}
-                            style={s.docLink}
+                            style={{
+                              ...s.docLink,
+                              ...(isCancelled ? { color: 'var(--text-muted)' } : null),
+                            }}
                           >
                             {row.doc_number_root}
                           </a>
@@ -204,22 +210,22 @@ export default function InventoryDashboard() {
                           </div>
                         </div>
                       </td>
-                      <Cell value={row.application_name} style={{ fontWeight: 500 }} />
-                      <Cell value={ocText} />
+                      <Cell value={row.application_name} style={{ fontWeight: 500, ...mutedStyle }} />
+                      <Cell value={ocText} style={mutedStyle} />
                       <td style={s.td} title={STATUS_LABELS[row.status] || row.status}>
                         <div style={s.cellInner}>
                           <StatusBadge status={row.status} />
                         </div>
                       </td>
-                      <Cell value={sf.service_type} />
-                      <Cell value={sf.hosting_location} />
-                      <Cell value={sf.hyperscaler} />
-                      <Cell value={sf.disaster_recovery} />
-                      <Cell value={sf.dr_location} />
-                      <Cell value={sf.data_residency_region} />
-                      <Cell value={sf.encryption_at_rest} />
-                      <Cell value={sf.encryption_in_transit} />
-                      <Cell value={sf.mfa_supported} />
+                      <Cell value={sf.service_type} style={mutedStyle} />
+                      <Cell value={sf.hosting_location} style={mutedStyle} />
+                      <Cell value={sf.hyperscaler} style={mutedStyle} />
+                      <Cell value={sf.disaster_recovery} style={mutedStyle} />
+                      <Cell value={sf.dr_location} style={mutedStyle} />
+                      <Cell value={sf.data_residency_region} style={mutedStyle} />
+                      <Cell value={sf.encryption_at_rest} style={mutedStyle} />
+                      <Cell value={sf.encryption_in_transit} style={mutedStyle} />
+                      <Cell value={sf.mfa_supported} style={mutedStyle} />
                     </tr>
                   )
                 })
@@ -307,11 +313,6 @@ const s = {
     top: 0,
     zIndex: 1,
   },
-  thStickyLeft: {
-    left: 0,
-    zIndex: 3,
-    boxShadow: '1px 0 0 var(--border)',
-  },
   tr: {
     transition: 'background-color 120ms ease',
   },
@@ -322,12 +323,6 @@ const s = {
     borderBottom: '1px solid var(--border)',
     verticalAlign: 'middle',
     maxWidth: 280,
-  },
-  tdStickyLeft: {
-    position: 'sticky',
-    left: 0,
-    zIndex: 1,
-    boxShadow: '1px 0 0 var(--border)',
   },
   cellInner: {
     overflow: 'hidden',

@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import AdminLayout from '../../components/admin/AdminLayout'
 import { useAuth } from '../../contexts/AuthContext'
 import { BASE_PATH } from '../../config'
+import { DEFAULT_PAGE_SIZE } from '../../constants/pagination'
 
 const STATUS_LABELS = {
   DRAFT: 'Draft',
@@ -81,7 +82,7 @@ export default function Dashboard() {
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
 
-  const LIMIT = 50
+  const LIMIT = DEFAULT_PAGE_SIZE
 
   const apiFetch = useCallback(
     (path, opts = {}) =>

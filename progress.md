@@ -178,6 +178,12 @@
 
 ---
 
+## Phase D2.1a — COMPLETE ✅
+
+- **Inventory dashboard fixes** — fully-cancelled families are now included (picker falls back to the highest-revision row when no non-cancelled revision exists) and rendered in muted text on every cell except the status pill. The forced column `minWidth`s and the sticky-left DOCUMENT # column have been removed so horizontal scroll only appears when the table's natural width exceeds the container. Frontend `LIMIT`/`PAGE_SIZE` literals on the Engagements list and Inventory dashboard now both source from `frontend/src/constants/pagination.js`.
+
+---
+
 ## Phase 3 — Not started
 
 - [ ] Claude API integration for field extraction (`services/extraction.py`)

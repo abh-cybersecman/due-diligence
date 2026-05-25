@@ -89,9 +89,11 @@ async def get_inventory(
     admin: str = Depends(get_admin_user),
     db: AsyncSession = Depends(get_db),
 ) -> InventoryResponse:
-    """One row per engagement family — latest non-cancelled revision's
-    structured fields and metadata. Families where every revision is
-    CANCELLED are excluded. Sorted by root doc number descending.
+    """One row per engagement family. The picked revision is the latest
+    non-cancelled revision when one exists, otherwise the highest-revision
+    row in the family regardless of status (so fully-cancelled families
+    appear, represented by their latest cancelled revision). Sorted by
+    root doc number descending.
     """
     all_rows = (
         await db.execute(
@@ -125,10 +127,10 @@ async def get_inventory(
         non_cancelled = [
             m for m in members if m.status != EngagementStatus.CANCELLED
         ]
-        if not non_cancelled:
-            continue
-
-        latest = max(non_cancelled, key=lambda m: m.revision_number)
+        if non_cancelled:
+            latest = max(non_cancelled, key=lambda m: m.revision_number)
+        else:
+            latest = max(members, key=lambda m: m.revision_number)
         root = next(
             (m for m in members if m.parent_engagement_id is None), members[0]
         )
