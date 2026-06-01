@@ -1,5 +1,24 @@
 # Import Engagement — Implementation Prompt
 
+## Required reading (do this first)
+
+Before writing any code, read these files end-to-end. They're the ground truth for conventions, schema, lifecycle, and security posture. Anything in this prompt that appears to conflict with them is a bug in this prompt — flag it and stop, do not silently diverge.
+
+1. `CLAUDE.md` — project overview, tech stack, design system, engagement lifecycle, file-upload security rules, doc-number generation, route layout, security checklist.
+2. `CLAUDE-questionnaire-versioning.md` — questionnaire schema, version semantics, the `IMPORTED-` naming convention this prompt extends, response-rendering rules, and the editor/refresh flows.
+3. `CLAUDE-md-patch.md` — pending amendments to CLAUDE.md; check whether anything here supersedes the main file.
+4. `backend/app/models/` — every SQLAlchemy model touched by this work. Read them all; do not assume column names.
+5. `backend/app/services/files.py` — existing file-upload pipeline: magic-byte validation, UUID filename generation, size/count enforcement. **Reuse these helpers verbatim; do not re-implement.**
+6. `backend/app/utils/sanitize.py` — text sanitisation (bleach). Every imported text field must pass through this.
+7. `backend/app/routers/admin/engagements.py` — where the new `/import` route will live. Mirror its auth dependency, response shape, and audit-log calls.
+8. `backend/app/services/audit.py` — audit log writing helpers.
+9. `backend/app/routers/admin/questionnaire.py` and `backend/app/services/questionnaire.py` — questionnaire editor endpoints; the version-list query lives here and needs the `WHERE version_name NOT LIKE 'IMPORTED-%'` filter added.
+10. `frontend/src/pages/admin/NewEngagement.jsx` — current page; becomes the "Create blank" tab.
+11. `frontend/src/pages/admin/Settings.jsx` — existing tab pattern to mirror for the Import prompt tab.
+12. `frontend/src/contexts/AuthContext.jsx` — admin auth fetch wrappers; reuse.
+
+If a referenced file does not exist or has been renamed, **stop and report** rather than guessing.
+
 ## Context
 
 The ISDD Portal currently creates engagements via the admin "New Engagement" form. We have ~160 historical Due Diligence families on SharePoint, spanning 3+ years, that need to be brought into the system. Re-typing them is not viable.
@@ -301,3 +320,20 @@ Two real reports live at (translate from Windows path; accessible via `/mnt/c/..
 - `C:\Users\ahmedhamza\Albatha Holding LLC\CyberSecurity - Documents\ISMS\Cyber Defense\Application Security\Due diligence\DD-1052 Wheels\ABHIT-IST-DD-1052 Due Diligence Report Wheels.pdf` — treat as R1 (doc number suffix `-R1`).
 
 Use the `.docx` siblings in the same folder when building the fixture — they extract cleanly via the `zipfile` + `xml.etree` route (no poppler needed). The two embedded images per doc (HLD diagram .tiff and a screenshot .png) become the fixture's attachments.
+
+## On completion
+
+When the implementation is functionally complete and the verification plan above passes:
+
+1. **Update documentation.** Do not create new top-level docs — extend the existing ones.
+   - `CLAUDE.md`: add an entry under "Build Phases" recording that historical-DD import is now available. Reference the new endpoint (`POST /api/admin/engagements/import`), the New Engagement tab, the Settings → Import prompt tab, and the `IMPORTED-` version-name convention. If a "Security Checklist" item is now satisfied by this work (e.g. import-path file-upload checks), tick it.
+   - `CLAUDE-questionnaire-versioning.md`: document the `IMPORTED-` version-name prefix, the per-engagement synthetic-version pattern, and the fact that the live editor filters out IMPORTED- versions.
+   - `README.md`: add a short "Importing historical DDs" section pointing users at New Engagement → Import bundle and Settings → Import prompt.
+
+2. **Commit.**
+   - One commit, or a small number of focused commits if backend / frontend / docs are cleanly separable. Avoid one mega-commit; avoid one-commit-per-file noise.
+   - Follow the existing commit-message style (`git log --oneline -20`): short subject line, descriptive of the change, no ticket prefixes (the repo doesn't use them).
+   - Include the project's `Co-Authored-By: ...` footer per the standard commit protocol.
+   - **Do not push.** The user pushes to `origin` (github main) and `gitlab` (feature/current branch) themselves on their own cadence.
+
+3. **Do not delete this prompt file.** It stays in `prompts/` as the permanent specification reference. If the implementation diverges from this prompt in any non-trivial way, update the prompt to match before committing — the prompt should always reflect what's actually in the code.

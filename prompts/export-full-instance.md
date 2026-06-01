@@ -1,5 +1,25 @@
 # Full-Instance Export & Restore — Implementation Prompt
 
+## Required reading (do this first)
+
+Before writing any code, read these files end-to-end. They're the ground truth for conventions, schema, lifecycle, and security posture. Anything in this prompt that appears to conflict with them is a bug in this prompt — flag it and stop, do not silently diverge.
+
+1. `CLAUDE.md` — project overview, tech stack, design system, engagement lifecycle, file-upload security rules, security checklist, audit logging conventions.
+2. `CLAUDE-questionnaire-versioning.md` — questionnaire schema, version semantics, the `IMPORTED-` naming convention (relevant because IMPORTED- versions travel inline with their engagement, while live versions are referenced by id).
+3. `CLAUDE-md-patch.md` — pending amendments to CLAUDE.md; check whether anything here supersedes the main file.
+4. `prompts/import-engagement.md` — the sibling historical-DD import prompt. The export bundle and the import bundle are **distinct schemas**; reading the import prompt ensures you don't accidentally unify them.
+5. `backend/app/models/` — every SQLAlchemy model in the codebase. Read them all; the export must serialise and the restore must deserialise every column.
+6. `backend/app/services/files.py` — file-upload pipeline (magic-byte validation, UUID filenames, size/count enforcement). **Reuse these helpers verbatim** during restore.
+7. `backend/app/utils/sanitize.py` — text sanitisation; not directly used by export, but restore writes must not re-introduce unsanitised content.
+8. `backend/app/services/audit.py` — audit log writing helpers; restore writes a single `instance.restored` entry plus `engagement.restored.renamed` for each renamed family.
+9. `backend/app/services/lifecycle.py` and `backend/app/routers/admin/engagements.py` — engagement creation paths. The restore must produce DB rows indistinguishable from these, but **must not call them** (it preserves UUIDs, tokens, timestamps that those paths regenerate).
+10. `backend/app/routers/admin/settings.py` — existing settings router; the new endpoints live here.
+11. `backend/app/services/questionnaire.py` and `backend/app/routers/admin/questionnaire.py` — live questionnaire version management; understand the existing read paths before adding the export's version dump.
+12. `frontend/src/pages/admin/Settings.jsx` — existing tab pattern; the Backup & Restore tab follows it exactly.
+13. `frontend/src/contexts/AuthContext.jsx` — admin auth fetch wrappers; reuse.
+
+If a referenced file does not exist or has been renamed, **stop and report** rather than guessing.
+
 ## Context
 
 The ISDD Portal needs a way to dump and restore the entire instance — every engagement family, every setting, every audit entry, every uploaded file — so an admin can move data between servers, back up before a destructive change, or seed a new environment.
@@ -457,3 +477,21 @@ Where there is shared logic — zip-slip-safe extraction, magic-byte validation,
 6. **Streaming verification.**
    - Generate a synthetic dataset producing a ~1 GB bundle. Confirm the export endpoint's response starts streaming within 2 seconds and that Python process RSS does not grow unboundedly during the response.
 7. **Regression.** Full existing test suite. Vendor/IR portals, historical-DD import, questionnaire editor, inventory dashboard, Word export, audit log views — all unchanged behaviour.
+
+## On completion
+
+When the implementation is functionally complete and the verification plan above passes:
+
+1. **Update documentation.** Do not create new top-level docs — extend the existing ones.
+   - `CLAUDE.md`: add an entry under "Build Phases" recording that full-instance export and restore is now available, **and mark the "Database backup" item under Phase 2/3 as superseded** (this feature replaces it). Reference the four new endpoints (`/api/admin/settings/instance/export`, `.../restore/upload`, `.../restore/execute`, `DELETE .../restore/{session_id}`), the Settings → Backup & Restore tab, and the bundle layout. Tick any Security Checklist items now satisfied.
+   - `CLAUDE-questionnaire-versioning.md`: note that live versions travel by id reference in the export bundle while IMPORTED- versions are inlined per-engagement.
+   - `README.md`: add a short "Backing up and restoring" section covering: where the tab lives, the passphrase requirement, the conflict-resolution flow on restore, and the bundle layout at a glance.
+   - The `.env.example` and any deployment notes: document `BACKUP_DIR` usage for restore sessions if not already covered.
+
+2. **Commit.**
+   - One commit, or a small number of focused commits if backend / frontend / docs are cleanly separable. Avoid one mega-commit; avoid one-commit-per-file noise.
+   - Follow the existing commit-message style (`git log --oneline -20`): short subject line, descriptive of the change, no ticket prefixes (the repo doesn't use them).
+   - Include the project's `Co-Authored-By: ...` footer per the standard commit protocol.
+   - **Do not push.** The user pushes to `origin` (github main) and `gitlab` (feature/current branch) themselves on their own cadence.
+
+3. **Do not delete this prompt file.** It stays in `prompts/` as the permanent specification reference. If the implementation diverges from this prompt in any non-trivial way, update the prompt to match before committing — the prompt should always reflect what's actually in the code.
